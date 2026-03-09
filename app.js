@@ -1,14 +1,11 @@
 // ─── Configuration ──────────────────────────────────────────────────────────
 const COORD_SCALE_X       = 2.0;
 const COORD_SCALE_Y       = 3.0;
-const PIXEL_SCALE         = 0.06;
 const CA_MAX              = 3.5;
 const CA_LERP             = 0.07;
-const TRAIL_FADE          = 0.02;
-const TRAIL_LINE_WIDTH    = 28;
-const MOVE_THRESHOLD      = 0.001;
 const PALM_FLIP_COOLDOWN  = 400;
 const PALM_HYSTERESIS     = 0.005;
+const HAND_LERP           = 0.15;
 const IMAGE_PATH          = "images/test-1.jpg";
 
 // ─── One Euro Filter ───────────────────────────────────────────────────────
@@ -56,6 +53,32 @@ const handCursor    = document.getElementById("hand-cursor");
 const cameraOverlay = document.getElementById("camera-overlay");
 const enableBtn     = document.getElementById("enable-camera-btn");
 
+// GUI controls
+const ctrlRadius   = document.getElementById("ctrl-radius");
+const ctrlStrength = document.getElementById("ctrl-strength");
+const ctrlFalloff  = document.getElementById("ctrl-falloff");
+const valRadius    = document.getElementById("val-radius");
+const valStrength  = document.getElementById("val-strength");
+const valFalloff   = document.getElementById("val-falloff");
+
+// Bulge params from sliders
+let bulgeRadius   = parseFloat(ctrlRadius.value);
+let bulgeStrength = parseFloat(ctrlStrength.value);
+let bulgeFalloff  = parseFloat(ctrlFalloff.value);
+
+ctrlRadius.addEventListener("input", () => {
+  bulgeRadius = parseFloat(ctrlRadius.value);
+  valRadius.textContent = bulgeRadius.toFixed(2);
+});
+ctrlStrength.addEventListener("input", () => {
+  bulgeStrength = parseFloat(ctrlStrength.value);
+  valStrength.textContent = bulgeStrength.toFixed(2);
+});
+ctrlFalloff.addEventListener("input", () => {
+  bulgeFalloff = parseFloat(ctrlFalloff.value);
+  valFalloff.textContent = bulgeFalloff.toFixed(1);
+});
+
 // GSAP: set panel off-screen initially
 gsap.set(panel, { xPercent: 100 });
 
@@ -63,7 +86,7 @@ gsap.set(panel, { xPercent: 100 });
 const filterRX = new OneEuroFilter(30, 0.35, 0.7, 1.0);
 const filterRY = new OneEuroFilter(30, 0.35, 0.7, 1.0);
 let rightX = 0.5, rightY = 0.5;
-let prevRightX = -1, prevRightY = -1;
+let smoothHandX = 0.5, smoothHandY = 0.5;
 let rightDetected = false;
 
 const filterLY = new OneEuroFilter(30, 0.2, 0.1, 1.0);
@@ -78,14 +101,6 @@ let palmState = "unknown";
 let lastPalmFlipTime = 0;
 
 let panelOpen = false;
-
-// ─── Trail canvas ──────────────────────────────────────────────────────────
-const trailCanvas = document.createElement("canvas");
-trailCanvas.width = 512;
-trailCanvas.height = 512;
-const trailCtx = trailCanvas.getContext("2d");
-trailCtx.fillStyle = "#000";
-trailCtx.fillRect(0, 0, 512, 512);
 
 // ─── WebGL Setup ────────────────────────────────────────────────────────────
 const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
@@ -108,11 +123,14 @@ const fragSrc = `
   precision highp float;
   varying vec2 v_texCoord;
   uniform sampler2D u_image;
-  uniform sampler2D u_trail;
   uniform vec2  u_resolution;
   uniform vec2  u_imageSize;
   uniform float u_caIntensity;
-  uniform float u_pixelScale;
+  uniform vec2  u_hand;
+  uniform float u_handActive;
+  uniform float u_bulgeRadius;
+  uniform float u_bulgeStrength;
+  uniform float u_bulgeFalloff;
 
   vec2 coverUV(vec2 uv, vec2 canvasRes, vec2 imgRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
@@ -130,28 +148,29 @@ const fragSrc = `
     vec2 uv = v_texCoord;
     float ar = u_resolution.x / u_resolution.y;
 
-    float trail = texture2D(u_trail, uv).r;
+    // Bulge distortion centered on right hand
+    if (u_handActive > 0.5) {
+      vec2 diff = uv - u_hand;
+      vec2 corrDiff = vec2(diff.x * ar, diff.y);
+      float dist = length(corrDiff);
 
-    vec2 sampleUV = uv;
-    if (trail > 0.01 && u_pixelScale > 0.001) {
-      float cellSize = trail * u_pixelScale + 0.001;
-      vec2 grid = vec2(uv.x * ar, uv.y);
-      vec2 modCoord = mod(grid, cellSize);
-      sampleUV = vec2(
-        uv.x - modCoord.x / ar + cellSize / (2.0 * ar),
-        uv.y - modCoord.y + cellSize / 2.0
-      );
+      if (dist < u_bulgeRadius) {
+        float t = dist / u_bulgeRadius;
+        float falloff = pow(1.0 - t, u_bulgeFalloff);
+        uv -= diff * falloff * u_bulgeStrength;
+      }
     }
 
+    // Chromatic aberration (left hand controls intensity)
     if (u_caIntensity > 0.01) {
-      vec2 fromCenter = sampleUV - 0.5;
+      vec2 fromCenter = uv - 0.5;
       float dist = length(fromCenter);
       vec2 caDir = dist > 0.001 ? normalize(fromCenter) : vec2(0.0);
       float caOff = u_caIntensity * 0.005 * dist * 2.0;
 
-      vec2 uvR = coverUV(sampleUV + caDir * caOff, u_resolution, u_imageSize);
-      vec2 uvG = coverUV(sampleUV,                  u_resolution, u_imageSize);
-      vec2 uvB = coverUV(sampleUV - caDir * caOff, u_resolution, u_imageSize);
+      vec2 uvR = coverUV(uv + caDir * caOff, u_resolution, u_imageSize);
+      vec2 uvG = coverUV(uv,                  u_resolution, u_imageSize);
+      vec2 uvB = coverUV(uv - caDir * caOff, u_resolution, u_imageSize);
 
       gl_FragColor = vec4(
         texture2D(u_image, clamp(uvR, vec2(0.0), vec2(1.0))).r,
@@ -160,7 +179,7 @@ const fragSrc = `
         1.0
       );
     } else {
-      vec2 imgUV = coverUV(sampleUV, u_resolution, u_imageSize);
+      vec2 imgUV = coverUV(uv, u_resolution, u_imageSize);
       gl_FragColor = texture2D(u_image, clamp(imgUV, vec2(0.0), vec2(1.0)));
     }
   }
@@ -206,31 +225,23 @@ gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
 gl.enableVertexAttribArray(aTex);
 gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
 
-const uResolution  = gl.getUniformLocation(program, "u_resolution");
-const uImageSize   = gl.getUniformLocation(program, "u_imageSize");
-const uCAIntensity = gl.getUniformLocation(program, "u_caIntensity");
-const uPixelScale  = gl.getUniformLocation(program, "u_pixelScale");
-const uImageLoc    = gl.getUniformLocation(program, "u_image");
-const uTrailLoc    = gl.getUniformLocation(program, "u_trail");
+const uResolution    = gl.getUniformLocation(program, "u_resolution");
+const uImageSize     = gl.getUniformLocation(program, "u_imageSize");
+const uCAIntensity   = gl.getUniformLocation(program, "u_caIntensity");
+const uHand          = gl.getUniformLocation(program, "u_hand");
+const uHandActive    = gl.getUniformLocation(program, "u_handActive");
+const uBulgeRadius   = gl.getUniformLocation(program, "u_bulgeRadius");
+const uBulgeStrength = gl.getUniformLocation(program, "u_bulgeStrength");
+const uBulgeFalloff  = gl.getUniformLocation(program, "u_bulgeFalloff");
+const uImageLoc      = gl.getUniformLocation(program, "u_image");
 
-// ─── Textures ───────────────────────────────────────────────────────────────
-function makeTexture() {
-  const t = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  return t;
-}
-
-const imageTex = makeTexture();
-const trailTex = makeTexture();
-
-gl.activeTexture(gl.TEXTURE1);
-gl.bindTexture(gl.TEXTURE_2D, trailTex);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-  new Uint8Array([0, 0, 0, 255]));
+// ─── Texture ────────────────────────────────────────────────────────────────
+const imageTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, imageTex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
 let imgW = 1, imgH = 1;
 const img = new Image();
@@ -257,51 +268,22 @@ resize();
 function render() {
   currentCA += (targetCA - currentCA) * CA_LERP;
 
-  // Fade trail
-  trailCtx.fillStyle = `rgba(0, 0, 0, ${TRAIL_FADE})`;
-  trailCtx.fillRect(0, 0, 512, 512);
-
-  // Draw continuous line trail from prev to current position
-  if (rightDetected && prevRightX >= 0) {
-    const vx = rightX - prevRightX;
-    const vy = rightY - prevRightY;
-    const speed = Math.sqrt(vx * vx + vy * vy);
-
-    if (speed > MOVE_THRESHOLD) {
-      const fromX = prevRightX * 512;
-      const fromY = prevRightY * 512;
-      const toX   = rightX * 512;
-      const toY   = rightY * 512;
-
-      const alpha = Math.min(speed * 12, 0.8);
-
-      trailCtx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-      trailCtx.lineWidth = TRAIL_LINE_WIDTH;
-      trailCtx.lineCap = "round";
-      trailCtx.lineJoin = "round";
-      trailCtx.beginPath();
-      trailCtx.moveTo(fromX, fromY);
-      trailCtx.lineTo(toX, toY);
-      trailCtx.stroke();
-    }
-  }
-  prevRightX = rightX;
-  prevRightY = rightY;
-
-  // Upload trail
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, trailTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, trailCanvas);
+  // Smoothly interpolate the hand position for the shader
+  smoothHandX += (rightX - smoothHandX) * HAND_LERP;
+  smoothHandY += (rightY - smoothHandY) * HAND_LERP;
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, imageTex);
 
   gl.uniform1i(uImageLoc, 0);
-  gl.uniform1i(uTrailLoc, 1);
   gl.uniform2f(uResolution, canvas.width, canvas.height);
   gl.uniform2f(uImageSize, imgW, imgH);
   gl.uniform1f(uCAIntensity, currentCA);
-  gl.uniform1f(uPixelScale, PIXEL_SCALE);
+  gl.uniform2f(uHand, smoothHandX, smoothHandY);
+  gl.uniform1f(uHandActive, rightDetected ? 1.0 : 0.0);
+  gl.uniform1f(uBulgeRadius, bulgeRadius);
+  gl.uniform1f(uBulgeStrength, bulgeStrength);
+  gl.uniform1f(uBulgeFalloff, bulgeFalloff);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   requestAnimationFrame(render);
@@ -415,7 +397,6 @@ function onHandResults(results) {
     leftDetected = false;
     handCursor.classList.remove("visible");
     targetCA *= 0.92;
-    prevRightX = -1;
     return;
   }
 
@@ -427,9 +408,6 @@ function onHandResults(results) {
     const lm = landmarks[i];
     const mpLabel = handedness[i]?.label;
 
-    // MediaPipe labels are INVERTED in selfie mode:
-    // MediaPipe "Left" = user's physical RIGHT hand
-    // MediaPipe "Right" = user's physical LEFT hand
     const isUserRight = mpLabel === "Left";
     const isUserLeft  = mpLabel === "Right";
 
@@ -477,7 +455,6 @@ function onHandResults(results) {
   if (!foundRight) {
     rightDetected = false;
     handCursor.classList.remove("visible");
-    prevRightX = -1;
   }
   if (!foundLeft) {
     leftDetected = false;
@@ -490,7 +467,7 @@ function onHandResults(results) {
   debugCtx.fillStyle = "#fff";
   debugCtx.font = "10px monospace";
   let hud = "";
-  if (rightDetected) hud += "R:trail ";
+  if (rightDetected) hud += "R:bulge ";
   if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
   if (palmState !== "unknown") hud += `palm:${palmState.charAt(0)}`;
   debugCtx.fillText(hud, 4, 12);
