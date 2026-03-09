@@ -1,15 +1,14 @@
 // ─── Configuration ──────────────────────────────────────────────────────────
 const COORD_SCALE_X       = 2.0;
 const COORD_SCALE_Y       = 3.0;
-const PIXEL_SCALE_BASE    = 0.025;    // base pixelation when right hand moves
-const PIXEL_SCALE_RANGE   = 0.10;     // extra pixelation range from left hand
-const CA_MAX              = 3.5;      // max chromatic aberration from left hand
+const PIXEL_SCALE         = 0.06;
+const CA_MAX              = 3.5;
 const CA_LERP             = 0.07;
-const TRAIL_FADE          = 0.025;
-const TRAIL_RADIUS        = 48;
-const MOVE_THRESHOLD      = 0.003;    // min velocity to paint trail
-const PALM_FLIP_COOLDOWN  = 1200;
-const PALM_HYSTERESIS     = 0.008;
+const TRAIL_FADE          = 0.02;
+const TRAIL_LINE_WIDTH    = 28;
+const MOVE_THRESHOLD      = 0.001;
+const PALM_FLIP_COOLDOWN  = 400;
+const PALM_HYSTERESIS     = 0.005;
 const IMAGE_PATH          = "images/test-1.jpg";
 
 // ─── One Euro Filter ───────────────────────────────────────────────────────
@@ -57,28 +56,23 @@ const handCursor    = document.getElementById("hand-cursor");
 const cameraOverlay = document.getElementById("camera-overlay");
 const enableBtn     = document.getElementById("enable-camera-btn");
 
+// GSAP: set panel off-screen initially
+gsap.set(panel, { xPercent: 100 });
+
 // ─── State ──────────────────────────────────────────────────────────────────
-// Right hand (user's physical right) — pixelation trail + palm flip
 const filterRX = new OneEuroFilter(30, 0.35, 0.7, 1.0);
 const filterRY = new OneEuroFilter(30, 0.35, 0.7, 1.0);
 let rightX = 0.5, rightY = 0.5;
-let prevRightX = 0.5, prevRightY = 0.5;
+let prevRightX = -1, prevRightY = -1;
 let rightDetected = false;
 
-// Left hand (user's physical left) — effect intensity control
 const filterLY = new OneEuroFilter(30, 0.2, 0.1, 1.0);
 let leftY = 0.5;
 let leftDetected = false;
 
-// Effect intensity driven by left hand (0 to 1)
-let targetIntensity = 0;
-let currentIntensity = 0;
-
-// CA
 let targetCA = 0;
 let currentCA = 0;
 
-// Palm flip state (for menu toggle)
 let palmCrossSmooth = 0;
 let palmState = "unknown";
 let lastPalmFlipTime = 0;
@@ -136,7 +130,6 @@ const fragSrc = `
     vec2 uv = v_texCoord;
     float ar = u_resolution.x / u_resolution.y;
 
-    // Trail controls where pixelation appears (0 = clean, >0 = pixelated)
     float trail = texture2D(u_trail, uv).r;
 
     vec2 sampleUV = uv;
@@ -150,7 +143,6 @@ const fragSrc = `
       );
     }
 
-    // Chromatic aberration (radial from center, intensity from left hand)
     if (u_caIntensity > 0.01) {
       vec2 fromCenter = sampleUV - 0.5;
       float dist = length(fromCenter);
@@ -263,41 +255,40 @@ resize();
 
 // ─── Render loop ────────────────────────────────────────────────────────────
 function render() {
-  // Smooth CA + intensity
   currentCA += (targetCA - currentCA) * CA_LERP;
-  currentIntensity += (targetIntensity - currentIntensity) * CA_LERP;
-
-  // Compute effective pixel scale
-  const effectivePixelScale = PIXEL_SCALE_BASE + currentIntensity * PIXEL_SCALE_RANGE;
 
   // Fade trail
   trailCtx.fillStyle = `rgba(0, 0, 0, ${TRAIL_FADE})`;
   trailCtx.fillRect(0, 0, 512, 512);
 
-  // Paint trail at right hand position only when hand is moving
-  if (rightDetected) {
+  // Draw continuous line trail from prev to current position
+  if (rightDetected && prevRightX >= 0) {
     const vx = rightX - prevRightX;
     const vy = rightY - prevRightY;
     const speed = Math.sqrt(vx * vx + vy * vy);
 
     if (speed > MOVE_THRESHOLD) {
-      const tx = rightX * 512;
-      const ty = rightY * 512;
-      const intensity = Math.min(speed * 15, 1.0);
-      const grad = trailCtx.createRadialGradient(tx, ty, 0, tx, ty, TRAIL_RADIUS);
-      grad.addColorStop(0, `rgba(255, 255, 255, ${0.5 * intensity})`);
-      grad.addColorStop(0.6, `rgba(255, 255, 255, ${0.2 * intensity})`);
-      grad.addColorStop(1, "rgba(255, 255, 255, 0)");
-      trailCtx.fillStyle = grad;
+      const fromX = prevRightX * 512;
+      const fromY = prevRightY * 512;
+      const toX   = rightX * 512;
+      const toY   = rightY * 512;
+
+      const alpha = Math.min(speed * 12, 0.8);
+
+      trailCtx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+      trailCtx.lineWidth = TRAIL_LINE_WIDTH;
+      trailCtx.lineCap = "round";
+      trailCtx.lineJoin = "round";
       trailCtx.beginPath();
-      trailCtx.arc(tx, ty, TRAIL_RADIUS, 0, Math.PI * 2);
-      trailCtx.fill();
+      trailCtx.moveTo(fromX, fromY);
+      trailCtx.lineTo(toX, toY);
+      trailCtx.stroke();
     }
   }
   prevRightX = rightX;
   prevRightY = rightY;
 
-  // Upload trail texture
+  // Upload trail
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, trailTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, trailCanvas);
@@ -310,7 +301,7 @@ function render() {
   gl.uniform2f(uResolution, canvas.width, canvas.height);
   gl.uniform2f(uImageSize, imgW, imgH);
   gl.uniform1f(uCAIntensity, currentCA);
-  gl.uniform1f(uPixelScale, effectivePixelScale);
+  gl.uniform1f(uPixelScale, PIXEL_SCALE);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   requestAnimationFrame(render);
@@ -325,33 +316,6 @@ function remapY(v) {
   return Math.max(0, Math.min(1, (v - 0.5) * COORD_SCALE_Y + 0.5));
 }
 
-// ─── Hand classification by screen position ─────────────────────────────────
-// More reliable than MediaPipe's handedness labels in selfie mode
-function classifyHands(landmarks) {
-  const result = { right: null, left: null };
-  if (!landmarks || landmarks.length === 0) return result;
-
-  if (landmarks.length === 1) {
-    const mirroredX = 1 - landmarks[0][0].x;
-    if (mirroredX > 0.5) {
-      result.right = landmarks[0];
-    } else {
-      result.left = landmarks[0];
-    }
-  } else {
-    const x0 = 1 - landmarks[0][0].x;
-    const x1 = 1 - landmarks[1][0].x;
-    if (x0 > x1) {
-      result.right = landmarks[0];
-      result.left  = landmarks[1];
-    } else {
-      result.right = landmarks[1];
-      result.left  = landmarks[0];
-    }
-  }
-  return result;
-}
-
 // ─── Palm flip detection ────────────────────────────────────────────────────
 function getPalmCross(lm) {
   const v1x = lm[5].x - lm[0].x;
@@ -363,7 +327,7 @@ function getPalmCross(lm) {
 
 function checkPalmFlip(lm, now) {
   const cross = getPalmCross(lm);
-  palmCrossSmooth = palmCrossSmooth * 0.6 + cross * 0.4;
+  palmCrossSmooth = palmCrossSmooth * 0.3 + cross * 0.7;
 
   let newState = palmState;
   if (palmCrossSmooth > PALM_HYSTERESIS) {
@@ -436,7 +400,6 @@ function initMediaPipe() {
 
 // ─── Hand results callback ──────────────────────────────────────────────────
 function onHandResults(results) {
-  // Debug preview
   debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
   debugCtx.save();
   debugCtx.translate(debugCanvas.width, 0);
@@ -445,71 +408,80 @@ function onHandResults(results) {
   debugCtx.restore();
 
   const landmarks = results.multiHandLandmarks;
+  const handedness = results.multiHandedness;
 
   if (!landmarks || landmarks.length === 0) {
     rightDetected = false;
     leftDetected = false;
     handCursor.classList.remove("visible");
     targetCA *= 0.92;
-    targetIntensity *= 0.92;
+    prevRightX = -1;
     return;
   }
 
-  const hands = classifyHands(landmarks);
   const now = performance.now();
+  let foundRight = false;
+  let foundLeft = false;
 
-  // ── RIGHT HAND: pixelation trail + palm flip for menu ──────────────────
-  if (hands.right) {
-    rightDetected = true;
-    const lm = hands.right;
+  for (let i = 0; i < landmarks.length; i++) {
+    const lm = landmarks[i];
+    const mpLabel = handedness[i]?.label;
 
-    const rawX = remapX(1 - lm[8].x);
-    const rawY = remapY(lm[8].y);
-    rightX = filterRX.filter(rawX, now);
-    rightY = filterRY.filter(rawY, now);
+    // MediaPipe labels are INVERTED in selfie mode:
+    // MediaPipe "Left" = user's physical RIGHT hand
+    // MediaPipe "Right" = user's physical LEFT hand
+    const isUserRight = mpLabel === "Left";
+    const isUserLeft  = mpLabel === "Right";
 
-    handCursor.style.left = `${rightX * 100}%`;
-    handCursor.style.top  = `${rightY * 100}%`;
-    handCursor.classList.add("visible");
+    if (isUserRight && !foundRight) {
+      foundRight = true;
+      rightDetected = true;
 
-    checkPalmFlip(lm, now);
+      const rawX = remapX(1 - lm[8].x);
+      const rawY = remapY(lm[8].y);
+      rightX = filterRX.filter(rawX, now);
+      rightY = filterRY.filter(rawY, now);
 
-    // Debug landmarks
-    debugCtx.fillStyle = "rgba(160,224,255,0.9)";
-    for (const p of lm) {
-      debugCtx.beginPath();
-      debugCtx.arc((1 - p.x) * debugCanvas.width, p.y * debugCanvas.height, 2, 0, Math.PI * 2);
-      debugCtx.fill();
+      handCursor.style.left = `${rightX * 100}%`;
+      handCursor.style.top  = `${rightY * 100}%`;
+      handCursor.classList.add("visible");
+
+      checkPalmFlip(lm, now);
+
+      debugCtx.fillStyle = "rgba(160,224,255,0.9)";
+      for (const p of lm) {
+        debugCtx.beginPath();
+        debugCtx.arc((1 - p.x) * debugCanvas.width, p.y * debugCanvas.height, 2, 0, Math.PI * 2);
+        debugCtx.fill();
+      }
     }
-  } else {
-    rightDetected = false;
-    handCursor.classList.remove("visible");
+
+    if (isUserLeft && !foundLeft) {
+      foundLeft = true;
+      leftDetected = true;
+
+      const rawY = remapY(lm[8].y);
+      leftY = filterLY.filter(rawY, now);
+
+      targetCA = Math.max(0, 1 - leftY) * CA_MAX;
+
+      debugCtx.fillStyle = "rgba(255,180,100,0.9)";
+      for (const p of lm) {
+        debugCtx.beginPath();
+        debugCtx.arc((1 - p.x) * debugCanvas.width, p.y * debugCanvas.height, 2, 0, Math.PI * 2);
+        debugCtx.fill();
+      }
+    }
   }
 
-  // ── LEFT HAND: effect intensity (pixelation scale + CA) ────────────────
-  if (hands.left) {
-    leftDetected = true;
-    const lm = hands.left;
-
-    const rawY = remapY(lm[8].y);
-    leftY = filterLY.filter(rawY, now);
-
-    // Hand high = strong effect, hand low = no effect
-    const intensity = Math.max(0, 1 - leftY);
-    targetIntensity = intensity;
-    targetCA = intensity * CA_MAX;
-
-    // Debug landmarks
-    debugCtx.fillStyle = "rgba(255,180,100,0.9)";
-    for (const p of lm) {
-      debugCtx.beginPath();
-      debugCtx.arc((1 - p.x) * debugCanvas.width, p.y * debugCanvas.height, 2, 0, Math.PI * 2);
-      debugCtx.fill();
-    }
-  } else {
+  if (!foundRight) {
+    rightDetected = false;
+    handCursor.classList.remove("visible");
+    prevRightX = -1;
+  }
+  if (!foundLeft) {
     leftDetected = false;
     targetCA *= 0.92;
-    targetIntensity *= 0.92;
   }
 
   // Debug HUD
@@ -518,17 +490,27 @@ function onHandResults(results) {
   debugCtx.fillStyle = "#fff";
   debugCtx.font = "10px monospace";
   let hud = "";
-  if (rightDetected) hud += "R ";
-  if (leftDetected) hud += `L CA:${currentCA.toFixed(1)} PX:${(PIXEL_SCALE_BASE + currentIntensity * PIXEL_SCALE_RANGE).toFixed(3)} `;
-  if (palmState !== "unknown") hud += `PALM:${palmState.charAt(0)} `;
+  if (rightDetected) hud += "R:trail ";
+  if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
+  if (palmState !== "unknown") hud += `palm:${palmState.charAt(0)}`;
   debugCtx.fillText(hud, 4, 12);
 }
 
-// ─── Panel toggle ───────────────────────────────────────────────────────────
+// ─── Panel toggle (GSAP — power4.out, 600ms) ───────────────────────────────
 function togglePanel() {
   panelOpen = !panelOpen;
-  panel.classList.toggle("open", panelOpen);
-  hamburger.classList.toggle("open", panelOpen);
+
+  if (panelOpen) {
+    gsap.to(panel, { xPercent: 0, duration: 0.6, ease: "power4.out" });
+    gsap.to(hamburger.children[0], { y: 17, rotation: 45, duration: 0.6, ease: "power4.out" });
+    gsap.to(hamburger.children[1], { opacity: 0, duration: 0.25 });
+    gsap.to(hamburger.children[2], { y: -17, rotation: -45, duration: 0.6, ease: "power4.out" });
+  } else {
+    gsap.to(panel, { xPercent: 100, duration: 0.6, ease: "power4.out" });
+    gsap.to(hamburger.children[0], { y: 0, rotation: 0, duration: 0.6, ease: "power4.out" });
+    gsap.to(hamburger.children[1], { opacity: 1, duration: 0.25, delay: 0.15 });
+    gsap.to(hamburger.children[2], { y: 0, rotation: 0, duration: 0.6, ease: "power4.out" });
+  }
 }
 
 hamburger.addEventListener("click", togglePanel);
