@@ -5,8 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MediaPipe WebGL — Hand Gesture Distortion</title>
   <link rel="stylesheet" href="style.css" />
+
+  <!-- MediaPipe dependencies loaded as classic scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
 </head>
 <body>
+
+  <!-- Camera permission overlay -->
+  <div id="camera-overlay" class="camera-overlay">
+    <div class="camera-overlay__content">
+      <div class="camera-overlay__icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </div>
+      <h2>Enable Camera</h2>
+      <p>This experience uses your camera to track hand gestures.<br>Move your hand to distort the image. Pinch to interact.</p>
+      <button id="enable-camera-btn" class="camera-overlay__btn">Enable Camera</button>
+    </div>
+  </div>
 
   <!-- Hamburger menu (top-right) -->
   <button id="hamburger" class="hamburger" aria-label="Menu">
@@ -34,15 +53,15 @@
   <!-- Hand cursor -->
   <div id="hand-cursor" class="hand-cursor"></div>
 
-  <!-- WebGL canvas fills the viewport; the image is rendered as a texture -->
+  <!-- WebGL canvas fills the viewport -->
   <canvas id="webgl-canvas"></canvas>
 
   <!-- Hidden video for webcam feed -->
   <video id="webcam" autoplay playsinline style="display:none"></video>
 
-  <!-- Debug: small webcam preview (bottom-left) -->
+  <!-- Debug: small webcam preview (bottom-right) -->
   <canvas id="debug-canvas" class="debug-canvas"></canvas>
 
-  <script type="module" src="app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

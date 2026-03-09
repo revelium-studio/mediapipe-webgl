@@ -1,23 +1,25 @@
 // ─── Configuration ──────────────────────────────────────────────────────────
-const PINCH_THRESHOLD = 0.06;
-const PINCH_COOLDOWN  = 600;          // ms between pinch triggers
-const DISTORTION_RADIUS = 0.25;       // normalised radius of effect
-const DISTORTION_STRENGTH = 0.045;    // maximum UV displacement
-const LERP_SPEED = 0.12;             // hand-position smoothing
-const IMAGE_PATH = "images/test-1.jpg";
+const PINCH_THRESHOLD   = 0.07;
+const PINCH_COOLDOWN    = 600;
+const DISTORTION_RADIUS = 0.28;
+const DISTORTION_STRENGTH = 0.05;
+const LERP_SPEED        = 0.12;
+const IMAGE_PATH        = "images/test-1.jpg";
 
-// ─── DOM references ─────────────────────────────────────────────────────────
-const canvas      = document.getElementById("webgl-canvas");
-const video       = document.getElementById("webcam");
-const debugCanvas = document.getElementById("debug-canvas");
-const debugCtx    = debugCanvas.getContext("2d");
-const hamburger   = document.getElementById("hamburger");
-const panel       = document.getElementById("panel");
-const handCursor  = document.getElementById("hand-cursor");
-const pinchEl     = document.getElementById("pinch-indicator");
+// ─── DOM refs ───────────────────────────────────────────────────────────────
+const canvas       = document.getElementById("webgl-canvas");
+const video        = document.getElementById("webcam");
+const debugCanvas  = document.getElementById("debug-canvas");
+const debugCtx     = debugCanvas.getContext("2d");
+const hamburger    = document.getElementById("hamburger");
+const panel        = document.getElementById("panel");
+const handCursor   = document.getElementById("hand-cursor");
+const pinchEl      = document.getElementById("pinch-indicator");
+const cameraOverlay = document.getElementById("camera-overlay");
+const enableBtn    = document.getElementById("enable-camera-btn");
 
 // ─── State ──────────────────────────────────────────────────────────────────
-let handX = 0.5, handY = 0.5;        // normalised [0,1]
+let handX = 0.5, handY = 0.5;
 let targetX = 0.5, targetY = 0.5;
 let isPinching = false;
 let lastPinchTime = 0;
@@ -45,30 +47,29 @@ const fragSrc = `
   precision highp float;
   varying vec2 v_texCoord;
   uniform sampler2D u_image;
-  uniform vec2  u_hand;           // hand position in UV space
-  uniform float u_radius;         // distortion radius
-  uniform float u_strength;       // distortion strength
-  uniform float u_time;           // for subtle animation
-  uniform vec2  u_resolution;     // canvas size
-  uniform vec2  u_imageSize;      // original image dimensions
-  uniform float u_handActive;     // 0 or 1
+  uniform vec2  u_hand;
+  uniform float u_radius;
+  uniform float u_strength;
+  uniform float u_time;
+  uniform vec2  u_resolution;
+  uniform vec2  u_imageSize;
+  uniform float u_handActive;
 
   vec2 coverUV(vec2 uv, vec2 canvasRes, vec2 imgRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
     float imgAspect    = imgRes.x / imgRes.y;
-    vec2 scale = vec2(1.0);
+    vec2 scale;
     if (canvasAspect > imgAspect) {
-      scale.y = (imgAspect / canvasAspect);
+      scale = vec2(1.0, imgAspect / canvasAspect);
     } else {
-      scale.x = (canvasAspect / imgAspect);
+      scale = vec2(canvasAspect / imgAspect, 1.0);
     }
-    return (uv - 0.5) * scale + 0.5;  // Flip removed — we'll flip the quad instead
+    return (uv - 0.5) / scale + 0.5;
   }
 
   void main() {
     vec2 uv = coverUV(v_texCoord, u_resolution, u_imageSize);
 
-    // Out-of-bounds → black
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
       return;
@@ -79,22 +80,19 @@ const fragSrc = `
       float aspectRatio = u_resolution.x / u_resolution.y;
       diff.x *= aspectRatio;
       float dist = length(diff);
-      float normDist = dist / (u_radius * aspectRatio);
+      float normDist = dist / (u_radius * max(aspectRatio, 1.0));
 
       if (normDist < 1.0) {
         float factor = 1.0 - normDist * normDist;
         factor = factor * factor;
-
         float wave = sin(u_time * 2.0 + dist * 30.0) * 0.15 + 1.0;
         vec2 offset = normalize(diff) * factor * u_strength * wave;
         uv += offset;
-
-        uv = clamp(uv, 0.0, 1.0);
+        uv = clamp(uv, vec2(0.0), vec2(1.0));
       }
     }
 
-    vec4 color = texture2D(u_image, uv);
-    gl_FragColor = color;
+    gl_FragColor = texture2D(u_image, uv);
   }
 `;
 
@@ -103,7 +101,7 @@ function compileShader(src, type) {
   gl.shaderSource(s, src);
   gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-    console.error(gl.getShaderInfoLog(s));
+    console.error("Shader compile error:", gl.getShaderInfoLog(s));
     gl.deleteShader(s);
     return null;
   }
@@ -117,11 +115,10 @@ gl.attachShader(program, vertShader);
 gl.attachShader(program, fragShader);
 gl.linkProgram(program);
 if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-  console.error(gl.getProgramInfoLog(program));
+  console.error("Program link error:", gl.getProgramInfoLog(program));
 }
 gl.useProgram(program);
 
-// Full-screen quad (Y flipped so image isn't upside-down)
 const quadVerts = new Float32Array([
   -1, -1,  0, 1,
    1, -1,  1, 1,
@@ -139,7 +136,6 @@ gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
 gl.enableVertexAttribArray(aTex);
 gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
 
-// Uniforms
 const uHand       = gl.getUniformLocation(program, "u_hand");
 const uRadius     = gl.getUniformLocation(program, "u_radius");
 const uStrength   = gl.getUniformLocation(program, "u_strength");
@@ -158,7 +154,6 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
 let imgW = 1, imgH = 1;
 const img = new Image();
-img.crossOrigin = "anonymous";
 img.onload = () => {
   imgW = img.width;
   imgH = img.height;
@@ -178,7 +173,7 @@ window.addEventListener("resize", resize);
 resize();
 
 // ─── Render loop ────────────────────────────────────────────────────────────
-const startTime = performance.now();
+const t0 = performance.now();
 
 function render() {
   handX += (targetX - handX) * LERP_SPEED;
@@ -187,7 +182,7 @@ function render() {
   gl.uniform2f(uHand, handX, handY);
   gl.uniform1f(uRadius, DISTORTION_RADIUS);
   gl.uniform1f(uStrength, DISTORTION_STRENGTH);
-  gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
+  gl.uniform1f(uTime, (performance.now() - t0) / 1000);
   gl.uniform2f(uResolution, canvas.width, canvas.height);
   gl.uniform2f(uImageSize, imgW, imgH);
   gl.uniform1f(uHandActive, handDetected ? 1.0 : 0.0);
@@ -197,52 +192,66 @@ function render() {
 }
 render();
 
-// ─── MediaPipe Hands ────────────────────────────────────────────────────────
-async function initMediaPipe() {
-  const { Hands } = await import(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
-  );
+// ─── Camera Permission Flow ────────────────────────────────────────────────
+enableBtn.addEventListener("click", startCamera);
 
+async function startCamera() {
+  enableBtn.textContent = "Starting…";
+  enableBtn.disabled = true;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: "user" },
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    cameraOverlay.classList.add("hidden");
+
+    initMediaPipe();
+  } catch (err) {
+    console.error("Camera access denied:", err);
+    enableBtn.textContent = "Camera Denied — Retry";
+    enableBtn.disabled = false;
+  }
+}
+
+// ─── MediaPipe Hands ────────────────────────────────────────────────────────
+function initMediaPipe() {
   const hands = new Hands({
-    locateFile: (f) =>
-      `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}`,
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
   });
 
   hands.setOptions({
     maxNumHands: 1,
     modelComplexity: 1,
     minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.6,
+    minTrackingConfidence: 0.5,
   });
 
   hands.onResults(onHandResults);
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 640, height: 480, facingMode: "user" },
-  });
-  video.srcObject = stream;
-  await video.play();
-
   debugCanvas.width  = 200;
   debugCanvas.height = 150;
 
-  async function tick() {
-    await hands.send({ image: video });
-    requestAnimationFrame(tick);
-  }
-  tick();
+  const camera = new Camera(video, {
+    onFrame: async () => {
+      await hands.send({ image: video });
+    },
+    width: 640,
+    height: 480,
+  });
+  camera.start();
 }
 
+// ─── Hand results callback ──────────────────────────────────────────────────
 function onHandResults(results) {
-  // Draw debug preview
   debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
   debugCtx.save();
+  debugCtx.translate(debugCanvas.width, 0);
   debugCtx.scale(-1, 1);
-  debugCtx.drawImage(
-    results.image,
-    -debugCanvas.width, 0,
-    debugCanvas.width, debugCanvas.height
-  );
+  debugCtx.drawImage(results.image, 0, 0, debugCanvas.width, debugCanvas.height);
   debugCtx.restore();
 
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
@@ -254,27 +263,26 @@ function onHandResults(results) {
   handDetected = true;
   const lm = results.multiHandLandmarks[0];
 
-  // Landmark 8 = index finger tip
-  const ix = 1 - lm[8].x;   // mirror x for selfie view
+  const ix = 1 - lm[8].x;
   const iy = lm[8].y;
 
   targetX = ix;
   targetY = iy;
 
-  // Position hand cursor
   handCursor.style.left = `${ix * 100}%`;
   handCursor.style.top  = `${iy * 100}%`;
   handCursor.classList.add("visible");
 
-  // Check hover on hamburger
+  // Hover detection for hamburger
   const hRect = hamburger.getBoundingClientRect();
   const screenX = ix * window.innerWidth;
   const screenY = iy * window.innerHeight;
+  const pad = 24;
   const isOverHamburger =
-    screenX >= hRect.left - 20 &&
-    screenX <= hRect.right + 20 &&
-    screenY >= hRect.top - 20 &&
-    screenY <= hRect.bottom + 20;
+    screenX >= hRect.left - pad &&
+    screenX <= hRect.right + pad &&
+    screenY >= hRect.top - pad &&
+    screenY <= hRect.bottom + pad;
 
   hamburger.classList.toggle("hovered", isOverHamburger);
 
@@ -292,13 +300,12 @@ function onHandResults(results) {
 
   handCursor.classList.toggle("pinching", isPinching);
 
-  // Trigger on pinch start
   if (isPinching && !wasPinching && now - lastPinchTime > PINCH_COOLDOWN) {
     lastPinchTime = now;
     onPinch(screenX, screenY, isOverHamburger);
   }
 
-  // Draw landmarks on debug canvas
+  // Draw landmarks on debug canvas (mirrored)
   debugCtx.fillStyle = "rgba(160, 224, 255, 0.9)";
   for (const p of lm) {
     const px = (1 - p.x) * debugCanvas.width;
@@ -307,12 +314,27 @@ function onHandResults(results) {
     debugCtx.arc(px, py, 2, 0, Math.PI * 2);
     debugCtx.fill();
   }
+
+  // Draw line between thumb and index to visualize pinch
+  const thumbPx = (1 - thumb.x) * debugCanvas.width;
+  const thumbPy = thumb.y * debugCanvas.height;
+  const indexPx = (1 - index.x) * debugCanvas.width;
+  const indexPy = index.y * debugCanvas.height;
+  debugCtx.strokeStyle = isPinching
+    ? "rgba(255, 180, 100, 0.9)"
+    : "rgba(160, 224, 255, 0.4)";
+  debugCtx.lineWidth = isPinching ? 2 : 1;
+  debugCtx.beginPath();
+  debugCtx.moveTo(thumbPx, thumbPy);
+  debugCtx.lineTo(indexPx, indexPy);
+  debugCtx.stroke();
 }
 
 function onPinch(x, y, overHamburger) {
-  // Show pinch indicator
   pinchEl.style.left = `${x}px`;
   pinchEl.style.top  = `${y}px`;
+  pinchEl.classList.remove("visible");
+  void pinchEl.offsetWidth;
   pinchEl.classList.add("visible");
   setTimeout(() => pinchEl.classList.remove("visible"), 600);
 
@@ -329,8 +351,3 @@ function togglePanel() {
 }
 
 hamburger.addEventListener("click", togglePanel);
-
-// ─── Bootstrap ──────────────────────────────────────────────────────────────
-initMediaPipe().catch((err) => {
-  console.warn("MediaPipe init failed — hand tracking unavailable:", err);
-});

@@ -15,6 +15,73 @@ html, body {
   color: #fff;
 }
 
+/* ── Camera permission overlay ──────────────────────── */
+.camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+
+.camera-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.camera-overlay__content {
+  text-align: center;
+  max-width: 400px;
+  padding: 0 24px;
+}
+
+.camera-overlay__icon {
+  margin-bottom: 24px;
+  opacity: 0.6;
+}
+
+.camera-overlay__content h2 {
+  font-size: 28px;
+  font-weight: 400;
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.camera-overlay__content p {
+  font-size: 15px;
+  line-height: 1.6;
+  opacity: 0.55;
+  margin-bottom: 36px;
+}
+
+.camera-overlay__btn {
+  background: #fff;
+  color: #000;
+  border: none;
+  padding: 14px 40px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 40px;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.camera-overlay__btn:hover {
+  transform: scale(1.04);
+  box-shadow: 0 4px 24px rgba(255, 255, 255, 0.15);
+}
+
+.camera-overlay__btn:active {
+  transform: scale(0.97);
+}
+
 /* ── WebGL canvas ───────────────────────────────────── */
 #webgl-canvas {
   position: fixed;
@@ -63,7 +130,6 @@ html, body {
   transform: translateY(-17px) rotate(-45deg);
 }
 
-/* Hover glow for hamburger */
 .hamburger.hovered span {
   background: #a0e0ff;
   box-shadow: 0 0 8px rgba(160, 224, 255, 0.6);
@@ -174,16 +240,15 @@ html, body {
   box-shadow: 0 0 18px rgba(255, 180, 100, 0.6);
 }
 
-/* ── Debug webcam preview ─────────────────────────────── */
+/* ── Debug webcam preview (bottom-RIGHT) ──────────────── */
 .debug-canvas {
   position: fixed;
   bottom: 16px;
-  left: 16px;
+  right: 16px;
   width: 200px;
   height: 150px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   z-index: 80;
   opacity: 0.85;
-  object-fit: cover;
 }
