@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaPipe WebGL — Hand Gesture Distortion</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Hamburger menu (top-right) -->
+  <button id="hamburger" class="hamburger" aria-label="Menu">
+    <span></span>
+    <span></span>
+    <span></span>
+  </button>
+
+  <!-- Side panel -->
+  <nav id="panel" class="panel">
+    <ul>
+      <li><a href="#">Home</a></li>
+      <li><a href="#">About</a></li>
+      <li><a href="#">Projects</a></li>
+      <li><a href="#">Contact</a></li>
+    </ul>
+  </nav>
+
+  <!-- Pinch indicator -->
+  <div id="pinch-indicator" class="pinch-indicator">
+    <div class="pinch-ring"></div>
+    <span class="pinch-label">Pinch</span>
+  </div>
+
+  <!-- Hand cursor -->
+  <div id="hand-cursor" class="hand-cursor"></div>
+
+  <!-- WebGL canvas fills the viewport; the image is rendered as a texture -->
+  <canvas id="webgl-canvas"></canvas>
+
+  <!-- Hidden video for webcam feed -->
+  <video id="webcam" autoplay playsinline style="display:none"></video>
+
+  <!-- Debug: small webcam preview (bottom-left) -->
+  <canvas id="debug-canvas" class="debug-canvas"></canvas>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

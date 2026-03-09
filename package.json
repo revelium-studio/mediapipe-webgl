@@ -1,0 +1,10 @@
+{
+  "name": "mediapipe-webgl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MediaPipe hand tracking with WebGL distortion — Vision Pro-style gestures",
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve ."
+  }
+}
