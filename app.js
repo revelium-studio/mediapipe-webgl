@@ -1,18 +1,19 @@
 // ─── Configuration ──────────────────────────────────────────────────────────
 const PINCH_THRESHOLD    = 0.08;
-const PINCH_COOLDOWN     = 500;
-const BLUR_RADIUS        = 0.32;
-const BLUR_STRENGTH      = 0.035;
-const COORD_SCALE        = 1.7;       // expands small hand movements to full screen
+const COORD_SCALE_X      = 2.0;
+const COORD_SCALE_Y      = 3.0;       // high Y scale = no arm raising needed
+const PIXEL_SCALE        = 0.08;      // max pixelation cell size
+const CA_MAX             = 5.0;
+const CA_LERP            = 0.08;      // CA smoothing speed
+const TRAIL_FADE         = 0.03;      // lower = longer-lasting trail
+const TRAIL_RADIUS       = 50;        // brush size in trail-canvas pixels
+const THREE_COOLDOWN     = 1200;      // ms between three-finger triggers
+const THREE_HOLD_FRAMES  = 4;         // must hold 3 fingers for N frames
 const IMAGE_PATH         = "images/test-1.jpg";
-const CA_ROTATION_GAIN   = 4.0;
-const CA_MAX             = 6.0;
-const CA_DECAY           = 0.97;
 
 // ─── One Euro Filter ───────────────────────────────────────────────────────
-// Adaptive low-pass: smooth when still, responsive when fast
 class OneEuroFilter {
-  constructor(freq = 30, minCutoff = 0.8, beta = 0.4, dCutoff = 1.0) {
+  constructor(freq = 30, minCutoff = 0.4, beta = 0.6, dCutoff = 1.0) {
     this.freq = freq;
     this.minCutoff = minCutoff;
     this.beta = beta;
@@ -61,20 +62,34 @@ const cameraOverlay = document.getElementById("camera-overlay");
 const enableBtn     = document.getElementById("enable-camera-btn");
 
 // ─── State ──────────────────────────────────────────────────────────────────
-const filterX = new OneEuroFilter();
-const filterY = new OneEuroFilter();
-let smoothX = 0.5, smoothY = 0.5;
-let isPinching = false;
-let lastPinchTime = 0;
-let panelOpen = false;
-let handDetected = false;
-let hoveringHamburger = false;
-let hoverFrames = 0;
+// Right hand — position + pixelation trail
+const filterRX = new OneEuroFilter(30, 0.4, 0.6, 1.0);
+const filterRY = new OneEuroFilter(30, 0.4, 0.6, 1.0);
+let rightX = 0.5, rightY = 0.5;
+let rightPinching = false;
+let rightDetected = false;
 
-// Two-hand rotation state
-let globalCA = 0;
-let prevRotAngle = null;
-let twoHandsThisFrame = false;
+// Left hand — CA control
+const filterLY = new OneEuroFilter(30, 0.2, 0.1, 1.0);
+let leftY = 0.5;
+let leftDetected = false;
+let targetCA = 0;
+let currentCA = 0;
+
+// Three-finger menu gesture (tracked on right hand)
+let threeFingerFrames = 0;
+let wasShowingThree = false;
+let lastThreeTime = 0;
+
+let panelOpen = false;
+
+// ─── Trail canvas (offscreen — painted each frame, used as WebGL texture) ──
+const trailCanvas = document.createElement("canvas");
+trailCanvas.width = 512;
+trailCanvas.height = 512;
+const trailCtx = trailCanvas.getContext("2d");
+trailCtx.fillStyle = "#000";
+trailCtx.fillRect(0, 0, 512, 512);
 
 // ─── WebGL Setup ────────────────────────────────────────────────────────────
 const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
@@ -97,14 +112,11 @@ const fragSrc = `
   precision highp float;
   varying vec2 v_texCoord;
   uniform sampler2D u_image;
-  uniform vec2  u_hand;
-  uniform float u_radius;
-  uniform float u_strength;
-  uniform float u_time;
+  uniform sampler2D u_trail;
   uniform vec2  u_resolution;
   uniform vec2  u_imageSize;
-  uniform float u_handActive;
-  uniform float u_globalCA;
+  uniform float u_caIntensity;
+  uniform float u_pixelScale;
 
   vec2 coverUV(vec2 uv, vec2 canvasRes, vec2 imgRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
@@ -122,52 +134,35 @@ const fragSrc = `
     vec2 uv = v_texCoord;
     float ar = u_resolution.x / u_resolution.y;
 
-    // Per-hand blur
-    float blurAmt = 0.0;
-    vec2 blurDir = vec2(1.0, 0.0);
+    // Sample trail to get local pixelation intensity
+    float trail = texture2D(u_trail, uv).r;
 
-    if (u_handActive > 0.5) {
-      vec2 diff = uv - u_hand;
-      vec2 corrDiff = vec2(diff.x * ar, diff.y);
-      float dist = length(corrDiff);
-      float normDist = dist / (u_radius * max(ar, 1.0));
-
-      if (normDist < 1.0) {
-        float falloff = 1.0 - normDist;
-        falloff = falloff * falloff * falloff;
-        blurAmt = falloff * u_strength;
-        blurDir = length(diff) > 0.001 ? normalize(diff) : vec2(1.0, 0.0);
-      }
+    // Pixelation (from trail)
+    vec2 sampleUV = uv;
+    if (trail > 0.01) {
+      float cellSize = trail * u_pixelScale + 0.001;
+      vec2 grid = vec2(uv.x * ar, uv.y);
+      vec2 modCoord = mod(grid, cellSize);
+      sampleUV = vec2(
+        uv.x - modCoord.x / ar + cellSize / (2.0 * ar),
+        uv.y - modCoord.y + cellSize / 2.0
+      );
     }
 
-    // Chromatic aberration direction: radial from hand (local) or center (global)
-    vec2 caDir;
-    if (u_handActive > 0.5 && blurAmt > 0.001) {
-      caDir = blurDir;
-    } else {
-      caDir = length(uv - 0.5) > 0.001 ? normalize(uv - 0.5) : vec2(1.0, 0.0);
-    }
+    // Chromatic aberration (global, radial from center)
+    vec2 fromCenter = sampleUV - 0.5;
+    vec2 caDir = length(fromCenter) > 0.001 ? normalize(fromCenter) : vec2(0.0);
+    float caOff = u_caIntensity * 0.006 * length(fromCenter) * 2.0;
 
-    float localCA = blurAmt * 2.0;
-    float totalCA = localCA + u_globalCA * 0.012;
+    vec2 uvR = coverUV(sampleUV + caDir * caOff, u_resolution, u_imageSize);
+    vec2 uvG = coverUV(sampleUV,                  u_resolution, u_imageSize);
+    vec2 uvB = coverUV(sampleUV - caDir * caOff, u_resolution, u_imageSize);
 
-    // Directional blur + chromatic aberration (8-tap box blur)
-    vec3 color = vec3(0.0);
-    for (int i = 0; i < 8; i++) {
-      float t = (float(i) / 7.0 - 0.5) * 2.0;
-      vec2 offset = blurDir * t * blurAmt;
-
-      vec2 caOff = caDir * totalCA;
-
-      vec2 uvR = coverUV(uv + offset + caOff, u_resolution, u_imageSize);
-      vec2 uvG = coverUV(uv + offset,          u_resolution, u_imageSize);
-      vec2 uvB = coverUV(uv + offset - caOff, u_resolution, u_imageSize);
-
-      color.r += texture2D(u_image, clamp(uvR, vec2(0.0), vec2(1.0))).r;
-      color.g += texture2D(u_image, clamp(uvG, vec2(0.0), vec2(1.0))).g;
-      color.b += texture2D(u_image, clamp(uvB, vec2(0.0), vec2(1.0))).b;
-    }
-    color /= 8.0;
+    vec3 color = vec3(
+      texture2D(u_image, clamp(uvR, vec2(0.0), vec2(1.0))).r,
+      texture2D(u_image, clamp(uvG, vec2(0.0), vec2(1.0))).g,
+      texture2D(u_image, clamp(uvB, vec2(0.0), vec2(1.0))).b
+    );
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -213,29 +208,40 @@ gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
 gl.enableVertexAttribArray(aTex);
 gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
 
-const uHand       = gl.getUniformLocation(program, "u_hand");
-const uRadius     = gl.getUniformLocation(program, "u_radius");
-const uStrength   = gl.getUniformLocation(program, "u_strength");
-const uTime       = gl.getUniformLocation(program, "u_time");
-const uResolution = gl.getUniformLocation(program, "u_resolution");
-const uImageSize  = gl.getUniformLocation(program, "u_imageSize");
-const uHandActive = gl.getUniformLocation(program, "u_handActive");
-const uGlobalCA   = gl.getUniformLocation(program, "u_globalCA");
+const uResolution  = gl.getUniformLocation(program, "u_resolution");
+const uImageSize   = gl.getUniformLocation(program, "u_imageSize");
+const uCAIntensity = gl.getUniformLocation(program, "u_caIntensity");
+const uPixelScale  = gl.getUniformLocation(program, "u_pixelScale");
+const uImageLoc    = gl.getUniformLocation(program, "u_image");
+const uTrailLoc    = gl.getUniformLocation(program, "u_trail");
 
-// Texture
-const tex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, tex);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+// ─── Textures ───────────────────────────────────────────────────────────────
+function makeTexture() {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return t;
+}
+
+const imageTex = makeTexture();
+const trailTex = makeTexture();
+
+// Upload 1x1 black pixel to trail so it's valid before first frame
+gl.activeTexture(gl.TEXTURE1);
+gl.bindTexture(gl.TEXTURE_2D, trailTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+  new Uint8Array([0, 0, 0, 255]));
 
 let imgW = 1, imgH = 1;
 const img = new Image();
 img.onload = () => {
   imgW = img.width;
   imgH = img.height;
-  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, imageTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
 };
 img.src = IMAGE_PATH;
@@ -251,25 +257,43 @@ window.addEventListener("resize", resize);
 resize();
 
 // ─── Render loop ────────────────────────────────────────────────────────────
-const t0 = performance.now();
-
 function render() {
-  // Decay global CA when two hands aren't actively rotating
-  if (!twoHandsThisFrame) {
-    globalCA *= CA_DECAY;
-    if (globalCA < 0.001) globalCA = 0;
-    prevRotAngle = null;
-  }
-  twoHandsThisFrame = false;
+  // Smooth CA toward target
+  currentCA += (targetCA - currentCA) * CA_LERP;
 
-  gl.uniform2f(uHand, smoothX, smoothY);
-  gl.uniform1f(uRadius, BLUR_RADIUS);
-  gl.uniform1f(uStrength, BLUR_STRENGTH);
-  gl.uniform1f(uTime, (performance.now() - t0) / 1000);
+  // Update trail canvas
+  trailCtx.fillStyle = `rgba(0, 0, 0, ${TRAIL_FADE})`;
+  trailCtx.fillRect(0, 0, 512, 512);
+
+  if (rightPinching && rightDetected) {
+    const tx = rightX * 512;
+    const ty = rightY * 512;
+    const grad = trailCtx.createRadialGradient(tx, ty, 0, tx, ty, TRAIL_RADIUS);
+    grad.addColorStop(0, "rgba(255, 255, 255, 0.6)");
+    grad.addColorStop(0.5, "rgba(255, 255, 255, 0.3)");
+    grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+    trailCtx.fillStyle = grad;
+    trailCtx.beginPath();
+    trailCtx.arc(tx, ty, TRAIL_RADIUS, 0, Math.PI * 2);
+    trailCtx.fill();
+  }
+
+  // Upload trail canvas as texture
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, trailTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, trailCanvas);
+
+  // Bind image
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, imageTex);
+
+  // Set uniforms
+  gl.uniform1i(uImageLoc, 0);
+  gl.uniform1i(uTrailLoc, 1);
   gl.uniform2f(uResolution, canvas.width, canvas.height);
   gl.uniform2f(uImageSize, imgW, imgH);
-  gl.uniform1f(uHandActive, handDetected ? 1.0 : 0.0);
-  gl.uniform1f(uGlobalCA, globalCA);
+  gl.uniform1f(uCAIntensity, currentCA);
+  gl.uniform1f(uPixelScale, PIXEL_SCALE);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   requestAnimationFrame(render);
@@ -277,8 +301,20 @@ function render() {
 render();
 
 // ─── Coordinate remapping ───────────────────────────────────────────────────
-function remap(v) {
-  return Math.max(0, Math.min(1, (v - 0.5) * COORD_SCALE + 0.5));
+function remapX(v) {
+  return Math.max(0, Math.min(1, (v - 0.5) * COORD_SCALE_X + 0.5));
+}
+function remapY(v) {
+  return Math.max(0, Math.min(1, (v - 0.5) * COORD_SCALE_Y + 0.5));
+}
+
+// ─── Finger extension detection ─────────────────────────────────────────────
+function isThreeGesture(lm) {
+  const indexExt  = lm[8].y  < lm[6].y;
+  const middleExt = lm[12].y < lm[10].y;
+  const ringExt   = lm[16].y < lm[14].y;
+  const pinkyExt  = lm[20].y < lm[18].y;
+  return indexExt && middleExt && ringExt && !pinkyExt;
 }
 
 // ─── Camera Permission Flow ────────────────────────────────────────────────
@@ -313,7 +349,7 @@ function initMediaPipe() {
   hands.setOptions({
     maxNumHands: 2,
     modelComplexity: 1,
-    minDetectionConfidence: 0.65,
+    minDetectionConfidence: 0.6,
     minTrackingConfidence: 0.5,
   });
 
@@ -341,96 +377,73 @@ function onHandResults(results) {
   debugCtx.restore();
 
   const landmarks = results.multiHandLandmarks;
+  const handedness = results.multiHandedness;
+
   if (!landmarks || landmarks.length === 0) {
-    handDetected = false;
+    rightDetected = false;
+    leftDetected = false;
     handCursor.classList.remove("visible");
-    hoveringHamburger = false;
-    hoverFrames = 0;
+    targetCA *= 0.95;
     return;
   }
 
-  // ── Primary hand (first detected) ─────────────────
-  handDetected = true;
-  const lm = landmarks[0];
+  rightDetected = false;
+  leftDetected = false;
   const now = performance.now();
+  let anyShowingThree = false;
 
-  const rawX = remap(1 - lm[8].x);
-  const rawY = remap(lm[8].y);
+  for (let i = 0; i < landmarks.length; i++) {
+    const lm = landmarks[i];
+    const label = handedness[i]?.label;
 
-  smoothX = filterX.filter(rawX, now);
-  smoothY = filterY.filter(rawY, now);
+    if (label === "Right") {
+      // ── RIGHT HAND: pointer + pixelation trail ──────
+      rightDetected = true;
 
-  handCursor.style.left = `${smoothX * 100}%`;
-  handCursor.style.top  = `${smoothY * 100}%`;
-  handCursor.classList.add("visible");
+      const rawX = remapX(1 - lm[8].x);
+      const rawY = remapY(lm[8].y);
+      rightX = filterRX.filter(rawX, now);
+      rightY = filterRY.filter(rawY, now);
 
-  // Hamburger hover with generous hitbox
-  const hRect = hamburger.getBoundingClientRect();
-  const screenX = smoothX * window.innerWidth;
-  const screenY = smoothY * window.innerHeight;
-  const pad = 60;
-  const isOverHamburger =
-    screenX >= hRect.left - pad &&
-    screenX <= hRect.right + pad &&
-    screenY >= hRect.top - pad &&
-    screenY <= hRect.bottom + pad;
+      // Cursor
+      handCursor.style.left = `${rightX * 100}%`;
+      handCursor.style.top  = `${rightY * 100}%`;
+      handCursor.classList.add("visible");
 
-  if (isOverHamburger) {
-    hoverFrames++;
-  } else {
-    hoverFrames = 0;
-  }
-  hoveringHamburger = hoverFrames >= 2;
-  hamburger.classList.toggle("hovered", hoveringHamburger);
+      // Pinch detection
+      const thumb = lm[4];
+      const index = lm[8];
+      const dx = thumb.x - index.x;
+      const dy = thumb.y - index.y;
+      const dz = (thumb.z || 0) - (index.z || 0);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      rightPinching = dist < PINCH_THRESHOLD;
+      handCursor.classList.toggle("pinching", rightPinching);
 
-  // Pinch detection
-  const thumb = lm[4];
-  const index = lm[8];
-  const dx = thumb.x - index.x;
-  const dy = thumb.y - index.y;
-  const dz = (thumb.z || 0) - (index.z || 0);
-  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-  const wasPinching = isPinching;
-  isPinching = dist < PINCH_THRESHOLD;
-  handCursor.classList.toggle("pinching", isPinching);
-
-  if (isPinching && !wasPinching && now - lastPinchTime > PINCH_COOLDOWN) {
-    lastPinchTime = now;
-    onPinch(screenX, screenY);
-  }
-
-  // ── Two-hand rotation detection ───────────────────
-  if (landmarks.length >= 2) {
-    const lm2 = landmarks[1];
-    const h1x = 1 - lm[8].x;
-    const h1y = lm[8].y;
-    const h2x = 1 - lm2[8].x;
-    const h2y = lm2[8].y;
-
-    const angle = Math.atan2(h2y - h1y, h2x - h1x);
-
-    if (prevRotAngle !== null) {
-      let delta = angle - prevRotAngle;
-      if (delta > Math.PI) delta -= 2 * Math.PI;
-      if (delta < -Math.PI) delta += 2 * Math.PI;
-
-      const speed = Math.abs(delta);
-      if (speed > 0.005 && speed < 1.5) {
-        globalCA += speed * CA_ROTATION_GAIN;
-        if (globalCA > CA_MAX) globalCA = CA_MAX;
+      // Three-finger gesture
+      if (isThreeGesture(lm)) {
+        anyShowingThree = true;
       }
     }
 
-    prevRotAngle = angle;
-    twoHandsThisFrame = true;
-  }
+    if (label === "Left") {
+      // ── LEFT HAND: chromatic aberration control ─────
+      leftDetected = true;
 
-  // ── Draw debug landmarks ──────────────────────────
-  for (let h = 0; h < landmarks.length; h++) {
-    const color = h === 0 ? "rgba(160,224,255,0.9)" : "rgba(255,180,100,0.9)";
+      const rawY = remapY(lm[8].y);
+      const smoothedY = filterLY.filter(rawY, now);
+      leftY = smoothedY;
+
+      // Hand high → strong CA, hand low → no CA
+      targetCA = (1 - leftY) * CA_MAX;
+    }
+
+    // Draw debug landmarks
+    const color = label === "Right"
+      ? "rgba(160,224,255,0.9)"
+      : "rgba(255,180,100,0.9)";
     debugCtx.fillStyle = color;
-    for (const p of landmarks[h]) {
+    for (const p of lm) {
       const px = (1 - p.x) * debugCanvas.width;
       const py = p.y * debugCanvas.height;
       debugCtx.beginPath();
@@ -439,33 +452,65 @@ function onHandResults(results) {
     }
   }
 
-  // Pinch line on primary hand
-  const thumbPx = (1 - thumb.x) * debugCanvas.width;
-  const thumbPy = thumb.y * debugCanvas.height;
-  const indexPx = (1 - index.x) * debugCanvas.width;
-  const indexPy = index.y * debugCanvas.height;
-  debugCtx.strokeStyle = isPinching
-    ? "rgba(255,180,100,0.9)"
-    : "rgba(160,224,255,0.4)";
-  debugCtx.lineWidth = isPinching ? 2 : 1;
-  debugCtx.beginPath();
-  debugCtx.moveTo(thumbPx, thumbPy);
-  debugCtx.lineTo(indexPx, indexPy);
-  debugCtx.stroke();
-}
-
-// ─── Pinch action ───────────────────────────────────────────────────────────
-function onPinch(x, y) {
-  pinchEl.style.left = `${x}px`;
-  pinchEl.style.top  = `${y}px`;
-  pinchEl.classList.remove("visible");
-  void pinchEl.offsetWidth;
-  pinchEl.classList.add("visible");
-  setTimeout(() => pinchEl.classList.remove("visible"), 600);
-
-  if (hoveringHamburger) {
-    togglePanel();
+  // Three-finger state machine (transition-triggered with hold requirement)
+  if (anyShowingThree) {
+    threeFingerFrames++;
+    if (
+      threeFingerFrames >= THREE_HOLD_FRAMES &&
+      !wasShowingThree &&
+      now - lastThreeTime > THREE_COOLDOWN
+    ) {
+      wasShowingThree = true;
+      lastThreeTime = now;
+      togglePanel();
+    }
+  } else {
+    threeFingerFrames = 0;
+    wasShowingThree = false;
   }
+
+  // Decay CA when left hand absent
+  if (!leftDetected) {
+    targetCA *= 0.95;
+  }
+
+  // Hide cursor when no right hand
+  if (!rightDetected) {
+    handCursor.classList.remove("visible");
+  }
+
+  // Pinch line debug (right hand only)
+  if (rightDetected) {
+    const idx = landmarks.findIndex((_, j) => handedness[j]?.label === "Right");
+    if (idx >= 0) {
+      const lm = landmarks[idx];
+      const thumb = lm[4];
+      const index = lm[8];
+      const thumbPx = (1 - thumb.x) * debugCanvas.width;
+      const thumbPy = thumb.y * debugCanvas.height;
+      const indexPx = (1 - index.x) * debugCanvas.width;
+      const indexPy = index.y * debugCanvas.height;
+      debugCtx.strokeStyle = rightPinching
+        ? "rgba(255,180,100,0.9)"
+        : "rgba(160,224,255,0.4)";
+      debugCtx.lineWidth = rightPinching ? 2 : 1;
+      debugCtx.beginPath();
+      debugCtx.moveTo(thumbPx, thumbPy);
+      debugCtx.lineTo(indexPx, indexPy);
+      debugCtx.stroke();
+    }
+  }
+
+  // Debug: show CA bar & gesture state
+  debugCtx.fillStyle = "rgba(0,0,0,0.5)";
+  debugCtx.fillRect(0, 0, debugCanvas.width, 18);
+  debugCtx.fillStyle = "#fff";
+  debugCtx.font = "10px monospace";
+  let status = "";
+  if (rightPinching) status += "PINCH ";
+  if (anyShowingThree) status += "THREE ";
+  if (leftDetected) status += `CA:${currentCA.toFixed(1)} `;
+  debugCtx.fillText(status, 4, 12);
 }
 
 // ─── Panel toggle ───────────────────────────────────────────────────────────
