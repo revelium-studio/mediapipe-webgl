@@ -14,6 +14,14 @@ const SPREAD_SENSITIVITY   = 1.8;
 
 // Ghost hand config
 const GHOST_SCALE = 0.5;
+const GHOST_SEGMENTS = [
+  [0, 1, 12], [1, 2, 11], [2, 3, 9], [3, 4, 7],
+  [0, 5, 12], [5, 6, 10], [6, 7, 8], [7, 8, 6],
+  [5, 9, 11], [9, 10, 10], [10, 11, 8], [11, 12, 6],
+  [9, 13, 10], [13, 14, 9], [14, 15, 7], [15, 16, 5],
+  [13, 17, 10], [0, 17, 12], [17, 18, 8], [18, 19, 6], [19, 20, 5],
+];
+const PALM_INDICES = [0, 1, 5, 9, 13, 17];
 
 // Face Mesh / AI assistant config
 const BLINK_THRESHOLD     = 0.21;
@@ -95,115 +103,20 @@ const aiEyeRight = document.getElementById("ai-eye-right");
 const aiMouth    = document.getElementById("ai-mouth");
 
 const ghostCanvas = document.getElementById("ghost-canvas");
+const ghostCtx    = ghostCanvas.getContext("2d");
 const ctrlGhost   = document.getElementById("ctrl-ghost");
 let ghostHandsEnabled = true;
 
-// Hide old 2D canvas — replaced by Three.js 3D renderer below
-ghostCanvas.style.display = "none";
-
-// ─── 3D Ghost Hands (Three.js) ──────────────────────────────────────────────
-const hand3DCanvas = document.createElement("canvas");
-hand3DCanvas.className = "ghost-canvas";
-hand3DCanvas.style.pointerEvents = "none";
-ghostCanvas.parentElement.insertBefore(hand3DCanvas, ghostCanvas);
-
-const handScene    = new THREE.Scene();
-const handCamera   = new THREE.OrthographicCamera(0, 1, 1, 0, 0.01, 10);
-handCamera.position.z = 5;
-
-const handRenderer = new THREE.WebGLRenderer({
-  canvas: hand3DCanvas,
-  alpha: true,
-  antialias: true,
-});
-handRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-handRenderer.setSize(window.innerWidth, window.innerHeight);
-handRenderer.setClearColor(0x000000, 0);
-
-handScene.add(new THREE.AmbientLight(0x667799, 0.8));
-const hand3DDir = new THREE.DirectionalLight(0xffffff, 1.5);
-hand3DDir.position.set(0.4, 0.9, 2);
-handScene.add(hand3DDir);
-const hand3DRim = new THREE.PointLight(0x5588ee, 1.0, 5);
-hand3DRim.position.set(0.7, 0.2, 1);
-handScene.add(hand3DRim);
-
-const hand3DMat = new THREE.MeshPhysicalMaterial({
-  color: 0x2255ee,
-  emissive: 0x0a1133,
-  metalness: 0.1,
-  roughness: 0.08,
-  transparent: true,
-  opacity: 0.7,
-  clearcoat: 1.0,
-  clearcoatRoughness: 0.04,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-});
-
-const unitSphere = new THREE.SphereGeometry(1, 14, 10);
-
-const HAND3D_BONES = [
-  [0,1],[1,2],[2,3],[3,4],
-  [0,5],[5,6],[6,7],[7,8],
-  [5,9],[9,10],[10,11],[11,12],
-  [9,13],[13,14],[14,15],[15,16],
-  [13,17],[0,17],[17,18],[18,19],[19,20],
-  [1,5],
-];
-
-const LM_RADIUS = [
-  0.022,
-  0.016, 0.014, 0.012, 0.010,
-  0.018, 0.013, 0.012, 0.010,
-  0.017, 0.013, 0.012, 0.010,
-  0.016, 0.012, 0.011, 0.009,
-  0.016, 0.011, 0.010, 0.008,
-];
-
-const HAND3D_INTERP = 4;
-const HAND3D_MAX = 2 * (21 + HAND3D_BONES.length * HAND3D_INTERP);
-const handInst = new THREE.InstancedMesh(unitSphere, hand3DMat, HAND3D_MAX);
-handInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-handInst.frustumCulled = false;
-handScene.add(handInst);
-
-const PALM3D_ORDER = [0, 1, 5, 9, 13, 17];
-const PALM3D_TRIS  = [0,1,2, 0,2,3, 0,3,4, 0,4,5];
-const palmArr = [];
-for (let h = 0; h < 2; h++) {
-  const geo = new THREE.BufferGeometry();
-  const pos = new Float32Array(PALM3D_ORDER.length * 3);
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  geo.setIndex(PALM3D_TRIS);
-  const mesh = new THREE.Mesh(geo, hand3DMat);
-  mesh.visible = false;
-  mesh.frustumCulled = false;
-  handScene.add(mesh);
-  palmArr.push({ geo, mesh, pos });
-}
-
-const _h3m = new THREE.Matrix4();
-const _h3p = new THREE.Vector3();
-const _h3q = new THREE.Quaternion();
-const _h3s = new THREE.Vector3();
-
-function clearHand3D() {
-  handInst.count = 0;
-  for (const p of palmArr) p.mesh.visible = false;
-  handRenderer.render(handScene, handCamera);
-}
-
 ctrlGhost.addEventListener("change", () => {
   ghostHandsEnabled = ctrlGhost.checked;
-  if (!ghostHandsEnabled) clearHand3D();
+  if (!ghostHandsEnabled) ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
 });
 
 window.enableGhostHands  = () => { ghostHandsEnabled = true;  ctrlGhost.checked = true; };
 window.disableGhostHands = () => {
   ghostHandsEnabled = false;
   ctrlGhost.checked = false;
-  clearHand3D();
+  ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
 };
 
 // Bulge params from sliders
@@ -438,7 +351,8 @@ function resize() {
   canvas.height = window.innerHeight * dpr;
   gl.viewport(0, 0, canvas.width, canvas.height);
 
-  handRenderer.setSize(window.innerWidth, window.innerHeight);
+  ghostCanvas.width  = window.innerWidth;
+  ghostCanvas.height = window.innerHeight;
 }
 window.addEventListener("resize", resize);
 resize();
@@ -653,76 +567,92 @@ function bounceElementsBack() {
   });
 }
 
-// ─── 3D Ghost Hand Rendering (Three.js instanced spheres + palm) ────────────
-function toLandmark3D(p) {
-  const rawX = 1 - p.x;
-  const rawY = p.y;
-  return {
-    x: 0.5 + (rawX - 0.5) * GHOST_SCALE,
-    y: 1 - (0.5 + (rawY - 0.5) * GHOST_SCALE),
-    z: -(p.z || 0) * 0.15,
-  };
+// ─── Ghost Hand Drawing (compact, soft, 2-pass) ────────────────────────────
+function drawGhostHand(ctx, landmarks, w, h) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const pts = landmarks.map(p => {
+    const rawX = (1 - p.x) * w;
+    const rawY = p.y * h;
+    return {
+      x: cx + (rawX - cx) * GHOST_SCALE,
+      y: cy + (rawY - cy) * GHOST_SCALE,
+    };
+  });
+
+  ctx.save();
+  ctx.shadowColor = "rgba(190, 220, 255, 0.35)";
+  ctx.shadowBlur = 18;
+  ctx.globalAlpha = 0.7;
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.10)";
+  ctx.beginPath();
+  ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
+  for (let i = 1; i < PALM_INDICES.length; i++) {
+    ctx.lineTo(pts[PALM_INDICES[i]].x, pts[PALM_INDICES[i]].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const [a, b, baseW] of GHOST_SEGMENTS) {
+    ctx.lineWidth = baseW + 8;
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.shadowColor = "rgba(220, 235, 255, 0.25)";
+  ctx.shadowBlur = 8;
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.beginPath();
+  ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
+  for (let i = 1; i < PALM_INDICES.length; i++) {
+    ctx.lineTo(pts[PALM_INDICES[i]].x, pts[PALM_INDICES[i]].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  const palmTris = [[0,5,9],[0,9,13],[0,13,17],[0,1,5]];
+  ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+  for (const [a, b, c] of palmTris) {
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.lineTo(pts[c].x, pts[c].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const [a, b, baseW] of GHOST_SEGMENTS) {
+    ctx.lineWidth = baseW;
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function renderGhostHands(allLandmarks) {
-  const active = ghostHandsEnabled && allLandmarks && allLandmarks.length > 0;
+  const w = ghostCanvas.width;
+  const h = ghostCanvas.height;
+  ghostCtx.clearRect(0, 0, w, h);
 
-  if (!active) {
-    handInst.count = 0;
-    for (const p of palmArr) p.mesh.visible = false;
-    handRenderer.render(handScene, handCamera);
-    return;
+  if (!ghostHandsEnabled || !allLandmarks || allLandmarks.length === 0) return;
+
+  for (const lm of allLandmarks) {
+    drawGhostHand(ghostCtx, lm, w, h);
   }
-
-  let idx = 0;
-
-  for (let h = 0; h < allLandmarks.length && h < 2; h++) {
-    const pts = allLandmarks[h].map(toLandmark3D);
-
-    for (let j = 0; j < 21; j++) {
-      const r = LM_RADIUS[j];
-      _h3p.set(pts[j].x, pts[j].y, pts[j].z);
-      _h3s.set(r, r, r);
-      _h3m.compose(_h3p, _h3q.identity(), _h3s);
-      handInst.setMatrixAt(idx++, _h3m);
-    }
-
-    for (const [a, b] of HAND3D_BONES) {
-      const rA = LM_RADIUS[a], rB = LM_RADIUS[b];
-      for (let t = 1; t <= HAND3D_INTERP; t++) {
-        const f = t / (HAND3D_INTERP + 1);
-        const r = rA + (rB - rA) * f;
-        _h3p.set(
-          pts[a].x + (pts[b].x - pts[a].x) * f,
-          pts[a].y + (pts[b].y - pts[a].y) * f,
-          pts[a].z + (pts[b].z - pts[a].z) * f,
-        );
-        _h3s.set(r, r, r);
-        _h3m.compose(_h3p, _h3q.identity(), _h3s);
-        handInst.setMatrixAt(idx++, _h3m);
-      }
-    }
-
-    const palm = palmArr[h];
-    const posA = palm.pos;
-    for (let i = 0; i < PALM3D_ORDER.length; i++) {
-      const p = pts[PALM3D_ORDER[i]];
-      posA[i * 3]     = p.x;
-      posA[i * 3 + 1] = p.y;
-      posA[i * 3 + 2] = p.z - 0.003;
-    }
-    palm.geo.attributes.position.needsUpdate = true;
-    palm.geo.computeVertexNormals();
-    palm.mesh.visible = true;
-  }
-
-  for (let h = allLandmarks.length; h < 2; h++) {
-    palmArr[h].mesh.visible = false;
-  }
-
-  handInst.count = idx;
-  handInst.instanceMatrix.needsUpdate = true;
-  handRenderer.render(handScene, handCamera);
 }
 
 // ─── Face Mesh: Head Pose & Blink Detection ─────────────────────────────────
