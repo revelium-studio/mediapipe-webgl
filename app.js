@@ -8,27 +8,26 @@ const PALM_HYSTERESIS     = 0.005;
 const HAND_LERP           = 0.15;
 const IMAGE_PATH          = "images/test-1.jpg";
 
-const PINCH_THRESHOLD     = 0.09;
-const SPREAD_LERP         = 0.1;
-const ROTATION_LERP       = 0.1;
+const PINCH_THRESHOLD      = 0.09;
+const SPREAD_SENSITIVITY   = 1.8;
 
-// Ghost hand skeleton: [startLandmark, endLandmark, lineWidth]
+// Ghost hand config
+const GHOST_SCALE = 0.5;
 const GHOST_SEGMENTS = [
-  [0, 1, 20], [1, 2, 18], [2, 3, 15], [3, 4, 11],
-  [0, 5, 20], [5, 6, 16], [6, 7, 12], [7, 8, 9],
-  [5, 9, 18], [9, 10, 16], [10, 11, 12], [11, 12, 9],
-  [9, 13, 17], [13, 14, 14], [14, 15, 11], [15, 16, 8],
-  [13, 17, 17], [0, 17, 20], [17, 18, 13], [18, 19, 10], [19, 20, 7],
+  [0, 1, 12], [1, 2, 11], [2, 3, 9], [3, 4, 7],
+  [0, 5, 12], [5, 6, 10], [6, 7, 8], [7, 8, 6],
+  [5, 9, 11], [9, 10, 10], [10, 11, 8], [11, 12, 6],
+  [9, 13, 10], [13, 14, 9], [14, 15, 7], [15, 16, 5],
+  [13, 17, 10], [0, 17, 12], [17, 18, 8], [18, 19, 6], [19, 20, 5],
 ];
 const PALM_INDICES = [0, 1, 5, 9, 13, 17];
-const FINGERTIPS = [4, 8, 12, 16, 20];
 
 const EL_BASE_OFFSETS = [
-  { x: -110, y: -65 },
-  { x:  120, y: -35 },
-  { x:  -45, y:  75 },
-  { x:   85, y:  55 },
-  { x:  -25, y: -105 },
+  { x: -210, y: -140 },
+  { x:  230, y:  -70 },
+  { x: -170, y:  150 },
+  { x:   50, y: -180 },
+  { x:  190, y:  140 },
 ];
 
 // ─── One Euro Filter ───────────────────────────────────────────────────────
@@ -153,10 +152,8 @@ let leftHandLm  = null;
 let bothPinching = false;
 let pinchStartDist  = 0;
 let pinchStartAngle = 0;
-let targetSpread    = 1.0;
-let targetRotAngle  = 0;
-let currentSpread   = 1.0;
-let currentRotAngle = 0;
+let lastSpread = 1.0;
+let lastRotAngle = 0;
 
 // ─── WebGL Setup ────────────────────────────────────────────────────────────
 const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
@@ -328,24 +325,6 @@ function render() {
   smoothHandX += (rightX - smoothHandX) * HAND_LERP;
   smoothHandY += (rightY - smoothHandY) * HAND_LERP;
 
-  // Update floating elements during bi-manual pinch
-  if (bothPinching) {
-    currentSpread   += (targetSpread   - currentSpread)   * SPREAD_LERP;
-    currentRotAngle += (targetRotAngle - currentRotAngle) * ROTATION_LERP;
-
-    const cos = Math.cos(currentRotAngle);
-    const sin = Math.sin(currentRotAngle);
-
-    elDoms.forEach((el, i) => {
-      const base = EL_BASE_OFFSETS[i];
-      const sx = base.x * currentSpread;
-      const sy = base.y * currentSpread;
-      const rx = sx * cos - sy * sin;
-      const ry = sx * sin + sy * cos;
-      gsap.set(el, { x: rx, y: ry });
-    });
-  }
-
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, imageTex);
 
@@ -419,7 +398,7 @@ function getPinchMid(lm) {
   };
 }
 
-// ─── Bi-manual pinch-spread gesture ─────────────────────────────────────────
+// ─── Bi-manual pinch-spread gesture (GSAP-driven) ──────────────────────────
 function processBimanualPinch() {
   if (!rightHandLm || !leftHandLm) {
     if (bothPinching) {
@@ -445,13 +424,35 @@ function processBimanualPinch() {
       bothPinching    = true;
       pinchStartDist  = Math.max(dist, 0.01);
       pinchStartAngle = angle;
-      currentSpread   = 1.0;
-      currentRotAngle = 0;
+      lastSpread   = 1.0;
+      lastRotAngle = 0;
       elDoms.forEach(el => gsap.killTweensOf(el));
     }
 
-    targetSpread   = Math.max(0.2, dist / pinchStartDist);
-    targetRotAngle = angle - pinchStartAngle;
+    const rawRatio = dist / pinchStartDist;
+    const spread   = Math.max(0.15, 1 + (rawRatio - 1) * SPREAD_SENSITIVITY);
+    const rot      = angle - pinchStartAngle;
+
+    if (Math.abs(spread - lastSpread) > 0.01 || Math.abs(rot - lastRotAngle) > 0.01) {
+      lastSpread   = spread;
+      lastRotAngle = rot;
+
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+
+      elDoms.forEach((el, i) => {
+        const base = EL_BASE_OFFSETS[i];
+        const sx = base.x * spread;
+        const sy = base.y * spread;
+        gsap.to(el, {
+          x: sx * cos - sy * sin,
+          y: sx * sin + sy * cos,
+          duration: 0.25,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      });
+    }
   } else if (bothPinching) {
     bothPinching = false;
     bounceElementsBack();
@@ -459,34 +460,41 @@ function processBimanualPinch() {
 }
 
 function bounceElementsBack() {
-  targetSpread   = 1.0;
-  targetRotAngle = 0;
+  lastSpread   = 1.0;
+  lastRotAngle = 0;
 
   elDoms.forEach((el, i) => {
     const base = EL_BASE_OFFSETS[i];
     gsap.to(el, {
       x: base.x,
       y: base.y,
-      duration: 1.0,
-      ease: "elastic.out(1, 0.35)",
+      duration: 0.9,
+      ease: "elastic.out(1, 0.4)",
+      overwrite: true,
     });
   });
 }
 
-// ─── Ghost Hand Drawing ─────────────────────────────────────────────────────
+// ─── Ghost Hand Drawing (compact, soft, 2-pass) ────────────────────────────
 function drawGhostHand(ctx, landmarks, w, h) {
-  const pts = landmarks.map(p => ({
-    x: (1 - p.x) * w,
-    y: p.y * h,
-  }));
+  const cx = w / 2;
+  const cy = h / 2;
+  const pts = landmarks.map(p => {
+    const rawX = (1 - p.x) * w;
+    const rawY = p.y * h;
+    return {
+      x: cx + (rawX - cx) * GHOST_SCALE,
+      y: cy + (rawY - cy) * GHOST_SCALE,
+    };
+  });
 
-  // === Pass 1: Outer glow ===
+  // === Pass 1: Soft glow halo ===
   ctx.save();
-  ctx.shadowColor = "rgba(180, 215, 255, 0.45)";
-  ctx.shadowBlur = 28;
+  ctx.shadowColor = "rgba(190, 220, 255, 0.35)";
+  ctx.shadowBlur = 18;
+  ctx.globalAlpha = 0.7;
 
-  // Palm fill (outer)
-  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.10)";
   ctx.beginPath();
   ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
   for (let i = 1; i < PALM_INDICES.length; i++) {
@@ -495,12 +503,11 @@ function drawGhostHand(ctx, landmarks, w, h) {
   ctx.closePath();
   ctx.fill();
 
-  // Wide glowing segments
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (const [a, b, baseW] of GHOST_SEGMENTS) {
-    ctx.lineWidth = baseW + 12;
+    ctx.lineWidth = baseW + 8;
     ctx.beginPath();
     ctx.moveTo(pts[a].x, pts[a].y);
     ctx.lineTo(pts[b].x, pts[b].y);
@@ -508,13 +515,12 @@ function drawGhostHand(ctx, landmarks, w, h) {
   }
   ctx.restore();
 
-  // === Pass 2: Core hand shape ===
+  // === Pass 2: Core shape ===
   ctx.save();
-  ctx.shadowColor = "rgba(210, 230, 255, 0.35)";
-  ctx.shadowBlur = 12;
+  ctx.shadowColor = "rgba(220, 235, 255, 0.25)";
+  ctx.shadowBlur = 8;
 
-  // Palm fill (core)
-  ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
   ctx.beginPath();
   ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
   for (let i = 1; i < PALM_INDICES.length; i++) {
@@ -523,9 +529,8 @@ function drawGhostHand(ctx, landmarks, w, h) {
   ctx.closePath();
   ctx.fill();
 
-  // Palm triangular mesh for solidity
-  ctx.fillStyle = "rgba(255, 255, 255, 0.10)";
   const palmTris = [[0,5,9],[0,9,13],[0,13,17],[0,1,5]];
+  ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
   for (const [a, b, c] of palmTris) {
     ctx.beginPath();
     ctx.moveTo(pts[a].x, pts[a].y);
@@ -535,8 +540,7 @@ function drawGhostHand(ctx, landmarks, w, h) {
     ctx.fill();
   }
 
-  // Tapered finger segments
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.50)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (const [a, b, baseW] of GHOST_SEGMENTS) {
@@ -546,47 +550,6 @@ function drawGhostHand(ctx, landmarks, w, h) {
     ctx.lineTo(pts[b].x, pts[b].y);
     ctx.stroke();
   }
-  ctx.restore();
-
-  // === Pass 3: Inner bright core ===
-  ctx.save();
-  ctx.shadowColor = "rgba(235, 245, 255, 0.3)";
-  ctx.shadowBlur = 6;
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-  ctx.lineCap = "round";
-  for (const [a, b, baseW] of GHOST_SEGMENTS) {
-    ctx.lineWidth = Math.max(baseW * 0.45, 3);
-    ctx.beginPath();
-    ctx.moveTo(pts[a].x, pts[a].y);
-    ctx.lineTo(pts[b].x, pts[b].y);
-    ctx.stroke();
-  }
-
-  // Joint circles
-  ctx.fillStyle = "rgba(255, 255, 255, 0.30)";
-  for (const p of pts) {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Fingertip highlights
-  ctx.shadowBlur = 18;
-  ctx.shadowColor = "rgba(200, 225, 255, 0.5)";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-  for (const tip of FINGERTIPS) {
-    ctx.beginPath();
-    ctx.arc(pts[tip].x, pts[tip].y, 6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Wrist highlight
-  ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
-  ctx.beginPath();
-  ctx.arc(pts[0].x, pts[0].y, 8, 0, Math.PI * 2);
-  ctx.fill();
-
   ctx.restore();
 }
 
@@ -633,9 +596,9 @@ function initMediaPipe() {
 
   hands.setOptions({
     maxNumHands: 2,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.6,
-    minTrackingConfidence: 0.5,
+    modelComplexity: 0,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.45,
   });
 
   hands.onResults(onHandResults);
@@ -755,7 +718,7 @@ function onHandResults(results) {
   let hud = "";
   if (rightDetected) hud += "R:bulge ";
   if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
-  if (bothPinching) hud += `spread:${currentSpread.toFixed(2)} `;
+  if (bothPinching) hud += `spread:${lastSpread.toFixed(2)} `;
   if (palmState !== "unknown") hud += `palm:${palmState.charAt(0)}`;
   debugCtx.fillText(hud, 4, 12);
 }
