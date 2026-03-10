@@ -6,7 +6,8 @@ const CA_LERP             = 0.07;
 const PALM_FLIP_COOLDOWN  = 400;
 const PALM_HYSTERESIS     = 0.005;
 const HAND_LERP           = 0.15;
-const IMAGE_PATH          = "images/test-1.jpg";
+const IMAGE_PATHS         = ["images/test-1.jpg", "images/image-flip.jpg"];
+const LEFT_FLIP_COOLDOWN  = 600;
 
 const PINCH_THRESHOLD      = 0.09;
 const SPREAD_SENSITIVITY   = 1.8;
@@ -84,6 +85,8 @@ const valFalloff   = document.getElementById("val-falloff");
 
 const elDoms = document.querySelectorAll(".floating-el");
 
+const imgTransition = document.getElementById("img-transition");
+
 const ghostCanvas = document.getElementById("ghost-canvas");
 const ghostCtx    = ghostCanvas.getContext("2d");
 const ctrlGhost   = document.getElementById("ctrl-ghost");
@@ -144,7 +147,13 @@ let palmCrossSmooth = 0;
 let palmState = "unknown";
 let lastPalmFlipTime = 0;
 
+let leftPalmCrossSmooth = 0;
+let leftPalmState = "unknown";
+let lastLeftPalmFlipTime = 0;
+
 let panelOpen = false;
+let currentImageIdx = 0;
+let imageTransitioning = false;
 
 // Bi-manual pinch state
 let rightHandLm = null;
@@ -286,24 +295,32 @@ const uBulgeStrength = gl.getUniformLocation(program, "u_bulgeStrength");
 const uBulgeFalloff  = gl.getUniformLocation(program, "u_bulgeFalloff");
 const uImageLoc      = gl.getUniformLocation(program, "u_image");
 
-// ─── Texture ────────────────────────────────────────────────────────────────
-const imageTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, imageTex);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+// ─── Textures (pre-load both images) ────────────────────────────────────────
+function makeTexture() {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return t;
+}
 
+const imageTextures = [makeTexture(), makeTexture()];
+const imageSizes    = [{ w: 1, h: 1 }, { w: 1, h: 1 }];
 let imgW = 1, imgH = 1;
-const img = new Image();
-img.onload = () => {
-  imgW = img.width;
-  imgH = img.height;
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, imageTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-};
-img.src = IMAGE_PATH;
+
+IMAGE_PATHS.forEach((src, idx) => {
+  const img = new Image();
+  img.onload = () => {
+    imageSizes[idx] = { w: img.width, h: img.height };
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, imageTextures[idx]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    if (idx === 0) { imgW = img.width; imgH = img.height; }
+  };
+  img.src = src;
+});
 
 // ─── Resize ─────────────────────────────────────────────────────────────────
 function resize() {
@@ -326,7 +343,7 @@ function render() {
   smoothHandY += (rightY - smoothHandY) * HAND_LERP;
 
   gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, imageTex);
+  gl.bindTexture(gl.TEXTURE_2D, imageTextures[currentImageIdx]);
 
   gl.uniform1i(uImageLoc, 0);
   gl.uniform2f(uResolution, canvas.width, canvas.height);
@@ -382,6 +399,59 @@ function checkPalmFlip(lm, now) {
   }
 
   palmState = newState;
+}
+
+// ─── Left palm flip → image switch ──────────────────────────────────────────
+function checkLeftPalmFlip(lm, now) {
+  const cross = getPalmCross(lm);
+  leftPalmCrossSmooth = leftPalmCrossSmooth * 0.3 + cross * 0.7;
+
+  let newState = leftPalmState;
+  if (leftPalmCrossSmooth > PALM_HYSTERESIS) {
+    newState = "positive";
+  } else if (leftPalmCrossSmooth < -PALM_HYSTERESIS) {
+    newState = "negative";
+  }
+
+  if (
+    leftPalmState !== "unknown" &&
+    newState !== leftPalmState &&
+    newState !== "unknown" &&
+    now - lastLeftPalmFlipTime > LEFT_FLIP_COOLDOWN &&
+    !imageTransitioning
+  ) {
+    lastLeftPalmFlipTime = now;
+    switchImage();
+  }
+
+  leftPalmState = newState;
+}
+
+function switchImage() {
+  imageTransitioning = true;
+  const nextIdx = currentImageIdx === 0 ? 1 : 0;
+  const nextSize = imageSizes[nextIdx];
+
+  imgTransition.style.backgroundImage = `url(${IMAGE_PATHS[nextIdx]})`;
+
+  const tl = gsap.timeline({
+    onComplete: () => {
+      currentImageIdx = nextIdx;
+      imgW = nextSize.w;
+      imgH = nextSize.h;
+      gsap.to(imgTransition, {
+        opacity: 0,
+        duration: 0.3,
+        ease: "power2.in",
+        onComplete: () => { imageTransitioning = false; },
+      });
+    },
+  });
+
+  tl.fromTo(imgTransition,
+    { opacity: 0, scale: 1.08 },
+    { opacity: 1, scale: 1, duration: 0.5, ease: "power3.out" }
+  );
 }
 
 // ─── Pinch helpers ──────────────────────────────────────────────────────────
@@ -689,6 +759,8 @@ function onHandResults(results) {
 
       targetCA = Math.max(0, 1 - leftY) * CA_MAX;
 
+      checkLeftPalmFlip(lm, now);
+
       debugCtx.fillStyle = "rgba(255,180,100,0.9)";
       for (const p of lm) {
         debugCtx.beginPath();
@@ -719,7 +791,8 @@ function onHandResults(results) {
   if (rightDetected) hud += "R:bulge ";
   if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
   if (bothPinching) hud += `spread:${lastSpread.toFixed(2)} `;
-  if (palmState !== "unknown") hud += `palm:${palmState.charAt(0)}`;
+  if (palmState !== "unknown") hud += `Rp:${palmState.charAt(0)} `;
+  if (leftPalmState !== "unknown") hud += `Lp:${leftPalmState.charAt(0)}`;
   debugCtx.fillText(hud, 4, 12);
 }
 

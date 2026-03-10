@@ -158,6 +158,18 @@ html, body {
   cursor: pointer;
 }
 
+/* ── Image transition overlay ──────────────────────── */
+.img-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
 /* ── Ghost hands overlay ───────────────────────────── */
 .ghost-canvas {
   position: fixed;

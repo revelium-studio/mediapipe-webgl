@@ -21,10 +21,9 @@
         </svg>
       </div>
       <h2>Enable Camera</h2>
-      <p>Right hand &rarr; bulge distortion.<br>
-      Left hand up/down &rarr; chromatic aberration.<br>
-      Pinch with both hands &amp; spread &rarr; scatter elements.<br>
-      Flip your palm &rarr; toggle menu.</p>
+      <p>Right hand &rarr; bulge distortion. Flip right palm &rarr; toggle menu.<br>
+      Left hand up/down &rarr; chromatic aberration. Flip left palm &rarr; switch image.<br>
+      Pinch with both hands &amp; spread &rarr; scatter elements.</p>
       <button id="enable-camera-btn" class="camera-overlay__btn">Enable Camera</button>
     </div>
   </div>
@@ -84,6 +83,9 @@
   <div id="hand-cursor" class="hand-cursor"></div>
 
   <canvas id="webgl-canvas"></canvas>
+
+  <!-- Image transition overlay (scale+fade between backgrounds) -->
+  <div id="img-transition" class="img-transition"></div>
 
   <!-- Ghost hands overlay (full-screen, above content) -->
   <canvas id="ghost-canvas" class="ghost-canvas"></canvas>
