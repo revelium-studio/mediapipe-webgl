@@ -763,16 +763,15 @@ async function startCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: "user" },
-      audio: true,
     });
-    video.srcObject = new MediaStream(stream.getVideoTracks());
+    video.srcObject = stream;
     await video.play();
     cameraOverlay.classList.add("hidden");
     initMediaPipe();
     initSpeechRecognition();
   } catch (err) {
-    console.error("Camera/mic access denied:", err);
-    enableBtn.textContent = "Permission Denied — Retry";
+    console.error("Camera access denied:", err);
+    enableBtn.textContent = "Camera Denied — Retry";
     enableBtn.disabled = false;
   }
 }
@@ -953,69 +952,66 @@ function togglePanel() {
 
 hamburger.addEventListener("click", togglePanel);
 
-// ─── Voice Commands (Web Speech API) ────────────────────────────────────────
-function initSpeechRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    console.warn("Web Speech API not supported in this browser.");
+// ─── Voice Commands (TensorFlow.js Speech Commands) ─────────────────────────
+// "go" / "right" → toggle menu open
+// "stop" / "left" → toggle menu closed
+// "up" → change background
+const VOICE_COMMANDS = {
+  go:    () => { if (!panelOpen) togglePanel(); },
+  right: () => { if (!panelOpen) togglePanel(); },
+  stop:  () => { if (panelOpen) togglePanel(); },
+  left:  () => { if (panelOpen) togglePanel(); },
+  up:    () => { if (!imageTransitioning) switchImage(); },
+};
+const VOICE_THRESHOLD   = 0.88;
+const VOICE_COOLDOWN_MS = 1200;
+
+async function initSpeechRecognition() {
+  if (typeof speechCommands === "undefined") {
+    console.warn("TensorFlow Speech Commands not loaded.");
     return;
   }
 
-  const recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
-  recognition.maxAlternatives = 3;
-
-  let lastActionTime = 0;
-  const ACTION_COOLDOWN = 1500;
-
-  function tryCommand(text, now) {
-    if (now - lastActionTime < ACTION_COOLDOWN) return;
-    const t = text.toLowerCase().trim();
-
-    if (/open.*(menu|panel)|show.*(menu|panel)/.test(t) && !panelOpen) {
-      lastActionTime = now;
-      togglePanel();
-    } else if (/close.*(menu|panel)|hide.*(menu|panel)/.test(t) && panelOpen) {
-      lastActionTime = now;
-      togglePanel();
-    } else if (/change.*(background|image)|switch.*(background|image)/.test(t)) {
-      if (!imageTransitioning) {
-        lastActionTime = now;
-        switchImage();
-      }
-    }
-  }
-
-  recognition.onresult = (event) => {
-    const now = performance.now();
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      for (let a = 0; a < result.length; a++) {
-        tryCommand(result[a].transcript, now);
-      }
-    }
-  };
-
-  recognition.onend = () => {
-    try { recognition.start(); } catch (_) {}
-  };
-
-  recognition.onerror = (e) => {
-    if (e.error === "not-allowed") {
-      console.warn("Microphone permission denied for speech recognition.");
-      return;
-    }
-    if (e.error !== "no-speech" && e.error !== "aborted") {
-      console.warn("Speech recognition error:", e.error);
-    }
-  };
-
   try {
-    recognition.start();
-    console.log("Speech recognition started.");
+    const recognizer = speechCommands.create("BROWSER_FFT");
+    await recognizer.ensureModelLoaded();
+
+    const labels = recognizer.wordLabels();
+    let lastActionTime = 0;
+
+    recognizer.listen(
+      ({ scores }) => {
+        const now = performance.now();
+        if (now - lastActionTime < VOICE_COOLDOWN_MS) return;
+
+        let bestIdx = 0;
+        let bestScore = 0;
+        for (let i = 0; i < scores.length; i++) {
+          if (scores[i] > bestScore) {
+            bestScore = scores[i];
+            bestIdx = i;
+          }
+        }
+
+        if (bestScore < VOICE_THRESHOLD) return;
+
+        const word = labels[bestIdx];
+        const handler = VOICE_COMMANDS[word];
+        if (handler) {
+          lastActionTime = now;
+          handler();
+          console.log(`Voice: "${word}" (${(bestScore * 100).toFixed(0)}%)`);
+        }
+      },
+      {
+        probabilityThreshold: 0.70,
+        invokeCallbackOnNoiseAndUnknown: false,
+        overlapFactor: 0.5,
+      }
+    );
+
+    console.log("TensorFlow Speech Commands active. Words:", labels.join(", "));
   } catch (err) {
-    console.warn("Could not start speech recognition:", err);
+    console.warn("Speech Commands init failed:", err);
   }
 }
