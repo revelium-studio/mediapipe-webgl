@@ -46,6 +46,12 @@
       <input type="range" id="ctrl-falloff" min="1.0" max="5.0" step="0.1" value="2.0" />
       <span id="val-falloff" class="controls__val">2.0</span>
     </div>
+    <div class="controls__divider"></div>
+    <div class="controls__row">
+      <label for="ctrl-ghost">Ghost</label>
+      <input type="checkbox" id="ctrl-ghost" checked />
+      <span class="controls__val" style="opacity:0.4">hands</span>
+    </div>
   </div>
 
   <button id="hamburger" class="hamburger" aria-label="Menu">
@@ -78,6 +84,9 @@
   <div id="hand-cursor" class="hand-cursor"></div>
 
   <canvas id="webgl-canvas"></canvas>
+
+  <!-- Ghost hands overlay (full-screen, above content) -->
+  <canvas id="ghost-canvas" class="ghost-canvas"></canvas>
 
   <video id="webcam" autoplay playsinline style="display:none"></video>
 

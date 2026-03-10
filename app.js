@@ -12,6 +12,17 @@ const PINCH_THRESHOLD     = 0.09;
 const SPREAD_LERP         = 0.1;
 const ROTATION_LERP       = 0.1;
 
+// Ghost hand skeleton: [startLandmark, endLandmark, lineWidth]
+const GHOST_SEGMENTS = [
+  [0, 1, 20], [1, 2, 18], [2, 3, 15], [3, 4, 11],
+  [0, 5, 20], [5, 6, 16], [6, 7, 12], [7, 8, 9],
+  [5, 9, 18], [9, 10, 16], [10, 11, 12], [11, 12, 9],
+  [9, 13, 17], [13, 14, 14], [14, 15, 11], [15, 16, 8],
+  [13, 17, 17], [0, 17, 20], [17, 18, 13], [18, 19, 10], [19, 20, 7],
+];
+const PALM_INDICES = [0, 1, 5, 9, 13, 17];
+const FINGERTIPS = [4, 8, 12, 16, 20];
+
 const EL_BASE_OFFSETS = [
   { x: -110, y: -65 },
   { x:  120, y: -35 },
@@ -73,6 +84,23 @@ const valStrength  = document.getElementById("val-strength");
 const valFalloff   = document.getElementById("val-falloff");
 
 const elDoms = document.querySelectorAll(".floating-el");
+
+const ghostCanvas = document.getElementById("ghost-canvas");
+const ghostCtx    = ghostCanvas.getContext("2d");
+const ctrlGhost   = document.getElementById("ctrl-ghost");
+let ghostHandsEnabled = true;
+
+ctrlGhost.addEventListener("change", () => {
+  ghostHandsEnabled = ctrlGhost.checked;
+  if (!ghostHandsEnabled) ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
+});
+
+window.enableGhostHands  = () => { ghostHandsEnabled = true;  ctrlGhost.checked = true; };
+window.disableGhostHands = () => {
+  ghostHandsEnabled = false;
+  ctrlGhost.checked = false;
+  ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
+};
 
 // Bulge params from sliders
 let bulgeRadius   = parseFloat(ctrlRadius.value);
@@ -286,6 +314,9 @@ function resize() {
   canvas.width  = window.innerWidth  * dpr;
   canvas.height = window.innerHeight * dpr;
   gl.viewport(0, 0, canvas.width, canvas.height);
+
+  ghostCanvas.width  = window.innerWidth;
+  ghostCanvas.height = window.innerHeight;
 }
 window.addEventListener("resize", resize);
 resize();
@@ -442,6 +473,135 @@ function bounceElementsBack() {
   });
 }
 
+// ─── Ghost Hand Drawing ─────────────────────────────────────────────────────
+function drawGhostHand(ctx, landmarks, w, h) {
+  const pts = landmarks.map(p => ({
+    x: (1 - p.x) * w,
+    y: p.y * h,
+  }));
+
+  // === Pass 1: Outer glow ===
+  ctx.save();
+  ctx.shadowColor = "rgba(180, 215, 255, 0.45)";
+  ctx.shadowBlur = 28;
+
+  // Palm fill (outer)
+  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.beginPath();
+  ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
+  for (let i = 1; i < PALM_INDICES.length; i++) {
+    ctx.lineTo(pts[PALM_INDICES[i]].x, pts[PALM_INDICES[i]].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Wide glowing segments
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const [a, b, baseW] of GHOST_SEGMENTS) {
+    ctx.lineWidth = baseW + 12;
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // === Pass 2: Core hand shape ===
+  ctx.save();
+  ctx.shadowColor = "rgba(210, 230, 255, 0.35)";
+  ctx.shadowBlur = 12;
+
+  // Palm fill (core)
+  ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+  ctx.beginPath();
+  ctx.moveTo(pts[PALM_INDICES[0]].x, pts[PALM_INDICES[0]].y);
+  for (let i = 1; i < PALM_INDICES.length; i++) {
+    ctx.lineTo(pts[PALM_INDICES[i]].x, pts[PALM_INDICES[i]].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Palm triangular mesh for solidity
+  ctx.fillStyle = "rgba(255, 255, 255, 0.10)";
+  const palmTris = [[0,5,9],[0,9,13],[0,13,17],[0,1,5]];
+  for (const [a, b, c] of palmTris) {
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.lineTo(pts[c].x, pts[c].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Tapered finger segments
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.50)";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const [a, b, baseW] of GHOST_SEGMENTS) {
+    ctx.lineWidth = baseW;
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // === Pass 3: Inner bright core ===
+  ctx.save();
+  ctx.shadowColor = "rgba(235, 245, 255, 0.3)";
+  ctx.shadowBlur = 6;
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+  ctx.lineCap = "round";
+  for (const [a, b, baseW] of GHOST_SEGMENTS) {
+    ctx.lineWidth = Math.max(baseW * 0.45, 3);
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x, pts[a].y);
+    ctx.lineTo(pts[b].x, pts[b].y);
+    ctx.stroke();
+  }
+
+  // Joint circles
+  ctx.fillStyle = "rgba(255, 255, 255, 0.30)";
+  for (const p of pts) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Fingertip highlights
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = "rgba(200, 225, 255, 0.5)";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+  for (const tip of FINGERTIPS) {
+    ctx.beginPath();
+    ctx.arc(pts[tip].x, pts[tip].y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Wrist highlight
+  ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+  ctx.beginPath();
+  ctx.arc(pts[0].x, pts[0].y, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function renderGhostHands(allLandmarks) {
+  const w = ghostCanvas.width;
+  const h = ghostCanvas.height;
+  ghostCtx.clearRect(0, 0, w, h);
+
+  if (!ghostHandsEnabled || !allLandmarks || allLandmarks.length === 0) return;
+
+  for (const lm of allLandmarks) {
+    drawGhostHand(ghostCtx, lm, w, h);
+  }
+}
+
 // ─── Camera Permission Flow ────────────────────────────────────────────────
 enableBtn.addEventListener("click", startCamera);
 
@@ -505,6 +665,9 @@ function onHandResults(results) {
 
   rightHandLm = null;
   leftHandLm  = null;
+
+  // Draw ghost hands (uses raw landmarks before any processing)
+  renderGhostHands(landmarks);
 
   if (!landmarks || landmarks.length === 0) {
     rightDetected = false;
