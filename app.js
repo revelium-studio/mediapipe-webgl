@@ -967,81 +967,96 @@ function togglePanel() {
 
 hamburger.addEventListener("click", togglePanel);
 
-// ─── Voice Commands (TensorFlow.js Speech Commands — local, no server) ──────
-// Say "right" → toggle menu | "up" → change background
-// Consecutive-detection: same word must be heard 2× within 1.2s to trigger
-const VOICE_ACTIONS = {
-  right: () => togglePanel(),
-  up:    () => { if (!imageTransitioning) switchImage(); },
-};
-const VOICE_CONFIRM_COUNT  = 2;
-const VOICE_CONFIRM_WINDOW = 1200;
-const VOICE_COOLDOWN       = 2500;
-const VOICE_THRESHOLD      = 0.92;
+// ─── Voice Commands (Whisper local speech-to-text via transformers.js) ──────
+// Say "open menu" / "close menu" / "change background" / "switch background"
+let voiceActionTime = 0;
+const VOICE_COOLDOWN = 2000;
+
+function matchVoiceCommand(text) {
+  const now = performance.now();
+  if (now - voiceActionTime < VOICE_COOLDOWN) return;
+  const t = text.toLowerCase();
+
+  if (/open.*menu|show.*menu/.test(t) && !panelOpen) {
+    voiceActionTime = now;
+    console.log("%c[Voice] ACTION: open menu", "color:#0f0;font-weight:bold");
+    togglePanel();
+  } else if (/close.*menu|hide.*menu/.test(t) && panelOpen) {
+    voiceActionTime = now;
+    console.log("%c[Voice] ACTION: close menu", "color:#0f0;font-weight:bold");
+    togglePanel();
+  } else if (/change.*back|switch.*back|change.*image|switch.*image/.test(t)) {
+    if (!imageTransitioning) {
+      voiceActionTime = now;
+      console.log("%c[Voice] ACTION: change background", "color:#0f0;font-weight:bold");
+      switchImage();
+    }
+  }
+}
 
 async function initSpeechRecognition() {
-  if (typeof speechCommands === "undefined") {
-    console.warn("[Voice] TF Speech Commands not loaded.");
-    return;
-  }
+  console.log("[Voice] Initializing Whisper speech recognition...");
 
-  console.log("[Voice] Loading TF Speech Commands model...");
+  const worker = new Worker("voice-worker.js", { type: "module" });
 
+  worker.addEventListener("message", (e) => {
+    switch (e.data.type) {
+      case "status":
+        console.log(`[Voice] ${e.data.msg}`);
+        break;
+      case "progress":
+        if (e.data.pct % 10 === 0) console.log(`[Voice] Model download: ${e.data.pct}%`);
+        break;
+      case "ready":
+        console.log("[Voice] Whisper model loaded. Starting mic capture...");
+        startVoiceCapture(worker);
+        break;
+      case "result":
+        console.log(`[Voice] Heard: "${e.data.text}"`);
+        matchVoiceCommand(e.data.text);
+        break;
+      case "error":
+        console.error(`[Voice] Error: ${e.data.msg}`);
+        break;
+    }
+  });
+
+  worker.postMessage({ type: "load" });
+}
+
+async function startVoiceCapture(worker) {
   try {
-    const recognizer = speechCommands.create("BROWSER_FFT");
-    await recognizer.ensureModelLoaded();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
 
-    const labels = recognizer.wordLabels();
-    console.log("[Voice] Model ready. Vocabulary:", labels.join(", "));
+    const audioCtx = new AudioContext({ sampleRate: 16000 });
+    const recorder = new MediaRecorder(stream);
 
-    const hitLog = {};
-    let lastActionTime = 0;
+    recorder.ondataavailable = async (e) => {
+      if (e.data.size === 0) return;
+      try {
+        const buf = await e.data.arrayBuffer();
+        const decoded = await audioCtx.decodeAudioData(buf);
+        const pcm = decoded.getChannelData(0);
 
-    recognizer.listen(
-      ({ scores }) => {
-        const now = performance.now();
-        if (now - lastActionTime < VOICE_COOLDOWN) return;
+        let sum = 0;
+        for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+        const rms = Math.sqrt(sum / pcm.length);
+        if (rms < 0.01) return;
 
-        let bestIdx = 0;
-        let bestScore = 0;
-        for (let i = 0; i < scores.length; i++) {
-          if (scores[i] > bestScore) {
-            bestScore = scores[i];
-            bestIdx = i;
-          }
-        }
+        worker.postMessage({ type: "transcribe", audio: pcm }, [pcm.buffer]);
+      } catch (_) {}
+    };
 
-        const word = labels[bestIdx];
+    recorder.start();
+    setInterval(() => {
+      recorder.stop();
+      recorder.start();
+    }, 1500);
 
-        if (word === "_background_noise_" || word === "_unknown_") return;
-
-        if (bestScore > 0.75) {
-          console.log(`[Voice] Heard: "${word}" (${(bestScore * 100).toFixed(0)}%)`);
-        }
-
-        if (bestScore < VOICE_THRESHOLD) return;
-        if (!VOICE_ACTIONS[word]) return;
-
-        if (!hitLog[word]) hitLog[word] = [];
-        hitLog[word].push(now);
-        hitLog[word] = hitLog[word].filter(t => now - t < VOICE_CONFIRM_WINDOW);
-
-        if (hitLog[word].length >= VOICE_CONFIRM_COUNT) {
-          hitLog[word] = [];
-          lastActionTime = now;
-          console.log(`%c[Voice] ACTION: "${word}"`, "color:#0f0;font-weight:bold");
-          VOICE_ACTIONS[word]();
-        }
-      },
-      {
-        probabilityThreshold: 0.65,
-        invokeCallbackOnNoiseAndUnknown: false,
-        overlapFactor: 0.6,
-      }
-    );
-
-    console.log("[Voice] Listening. Say 'right' (menu) or 'up' (background).");
+    console.log('[Voice] Listening. Say "open menu" or "change background".');
   } catch (err) {
-    console.error("[Voice] Init failed:", err);
+    console.error("[Voice] Mic capture failed:", err);
   }
 }
