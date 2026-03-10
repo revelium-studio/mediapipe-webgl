@@ -309,6 +309,35 @@ html, body {
   display: block;
 }
 
+/* ── AI Assistant sphere (bottom-left) ────────────────── */
+.ai-assistant {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  width: 160px;
+  height: 160px;
+  z-index: 25;
+  border-radius: 50%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ai-assistant spline-viewer {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ai-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* ── Debug webcam preview (bottom-right) ──────────────── */
 .debug-canvas {
   position: fixed;

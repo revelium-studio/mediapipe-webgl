@@ -23,6 +23,14 @@ const GHOST_SEGMENTS = [
 ];
 const PALM_INDICES = [0, 1, 5, 9, 13, 17];
 
+// Face Mesh / AI assistant config
+const BLINK_THRESHOLD     = 0.21;
+const AI_EYE_MAX_OFFSET   = 12;
+const AI_MOUTH_MAX_OFFSET = 8;
+const PITCH_REST_OFFSET   = 0.17;
+const EAR_RIGHT_INDICES   = [33, 160, 158, 133, 153, 144];
+const EAR_LEFT_INDICES    = [362, 385, 387, 263, 373, 380];
+
 const EL_BASE_OFFSETS = [
   { x: -210, y: -140 },
   { x:  230, y:  -70 },
@@ -86,6 +94,10 @@ const valFalloff   = document.getElementById("val-falloff");
 const elDoms = document.querySelectorAll(".floating-el");
 
 const imgTransition = document.getElementById("img-transition");
+
+const aiEyeLeft  = document.getElementById("ai-eye-left");
+const aiEyeRight = document.getElementById("ai-eye-right");
+const aiMouth    = document.getElementById("ai-mouth");
 
 const ghostCanvas = document.getElementById("ghost-canvas");
 const ghostCtx    = ghostCanvas.getContext("2d");
@@ -163,6 +175,12 @@ let pinchStartDist  = 0;
 let pinchStartAngle = 0;
 let lastSpread = 1.0;
 let lastRotAngle = 0;
+
+// Face tracking state
+const filterYaw   = new OneEuroFilter(30, 0.3, 0.5, 1.0);
+const filterPitch = new OneEuroFilter(30, 0.3, 0.5, 1.0);
+let faceDetected = false;
+let wasBlinking  = false;
 
 // ─── WebGL Setup ────────────────────────────────────────────────────────────
 const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
@@ -635,6 +653,86 @@ function renderGhostHands(allLandmarks) {
   }
 }
 
+// ─── Face Mesh: Head Pose & Blink Detection ─────────────────────────────────
+function landmarkDist(lm, i, j) {
+  const dx = lm[i].x - lm[j].x;
+  const dy = lm[i].y - lm[j].y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function getEAR(lm, idx) {
+  const v1 = landmarkDist(lm, idx[1], idx[5]);
+  const v2 = landmarkDist(lm, idx[2], idx[4]);
+  const h  = landmarkDist(lm, idx[0], idx[3]);
+  return (v1 + v2) / (2 * (h || 0.001));
+}
+
+function getHeadPose(lm) {
+  const noseTip       = lm[1];
+  const leftEyeOuter  = lm[33];
+  const rightEyeOuter = lm[263];
+  const forehead      = lm[10];
+  const chin          = lm[152];
+
+  const eyeMidX    = (leftEyeOuter.x + rightEyeOuter.x) / 2;
+  const eyeMidY    = (leftEyeOuter.y + rightEyeOuter.y) / 2;
+  const eyeWidth   = Math.abs(rightEyeOuter.x - leftEyeOuter.x) || 0.001;
+  const faceHeight = Math.abs(chin.y - forehead.y) || 0.001;
+
+  const rawYaw   = -(noseTip.x - eyeMidX) / eyeWidth;
+  const rawPitch = -((noseTip.y - eyeMidY) / faceHeight - PITCH_REST_OFFSET);
+
+  return { yaw: rawYaw, pitch: rawPitch };
+}
+
+function updateAIFace(yaw, pitch, blinking) {
+  const eyeX   = yaw   * AI_EYE_MAX_OFFSET;
+  const eyeY   = -pitch * AI_EYE_MAX_OFFSET;
+  const mouthX = yaw   * AI_MOUTH_MAX_OFFSET;
+  const mouthY = -pitch * AI_MOUTH_MAX_OFFSET;
+
+  gsap.to(aiEyeLeft,  { x: eyeX, y: eyeY, duration: 0.12, overwrite: true });
+  gsap.to(aiEyeRight, { x: eyeX, y: eyeY, duration: 0.12, overwrite: true });
+  gsap.to(aiMouth,    { x: mouthX, y: mouthY, duration: 0.12, overwrite: true });
+
+  if (blinking && !wasBlinking) {
+    gsap.to([aiEyeLeft, aiEyeRight], {
+      attr: { ry: 0.8 },
+      duration: 0.07,
+      ease: "power2.in",
+    });
+  } else if (!blinking && wasBlinking) {
+    gsap.to([aiEyeLeft, aiEyeRight], {
+      attr: { ry: 5 },
+      duration: 0.14,
+      ease: "power2.out",
+    });
+  }
+
+  wasBlinking = blinking;
+}
+
+function onFaceResults(results) {
+  if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+    faceDetected = false;
+    return;
+  }
+
+  faceDetected = true;
+  const lm  = results.multiFaceLandmarks[0];
+  const now = performance.now();
+
+  const pose  = getHeadPose(lm);
+  const yaw   = filterYaw.filter(Math.max(-1, Math.min(1, pose.yaw * 2.5)), now);
+  const pitch = filterPitch.filter(Math.max(-1, Math.min(1, pose.pitch * 3.0)), now);
+
+  const earL     = getEAR(lm, EAR_LEFT_INDICES);
+  const earR     = getEAR(lm, EAR_RIGHT_INDICES);
+  const blinking = ((earL + earR) / 2) < BLINK_THRESHOLD;
+
+  updateAIFace(yaw, pitch, blinking);
+}
+
 // ─── Camera Permission Flow ────────────────────────────────────────────────
 enableBtn.addEventListener("click", startCamera);
 
@@ -657,7 +755,7 @@ async function startCamera() {
   }
 }
 
-// ─── MediaPipe Hands ────────────────────────────────────────────────────────
+// ─── MediaPipe Hands + Face Mesh ─────────────────────────────────────────────
 function initMediaPipe() {
   const hands = new Hands({
     locateFile: (file) =>
@@ -673,11 +771,32 @@ function initMediaPipe() {
 
   hands.onResults(onHandResults);
 
+  const faceMesh = new FaceMesh({
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`,
+  });
+
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  faceMesh.onResults(onFaceResults);
+
   debugCanvas.width  = 200;
   debugCanvas.height = 150;
 
+  let frameIdx = 0;
   const camera = new Camera(video, {
-    onFrame: async () => { await hands.send({ image: video }); },
+    onFrame: async () => {
+      await hands.send({ image: video });
+      if (frameIdx % 2 === 0) {
+        await faceMesh.send({ image: video });
+      }
+      frameIdx++;
+    },
     width: 640,
     height: 480,
   });
@@ -792,7 +911,8 @@ function onHandResults(results) {
   if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
   if (bothPinching) hud += `spread:${lastSpread.toFixed(2)} `;
   if (palmState !== "unknown") hud += `Rp:${palmState.charAt(0)} `;
-  if (leftPalmState !== "unknown") hud += `Lp:${leftPalmState.charAt(0)}`;
+  if (leftPalmState !== "unknown") hud += `Lp:${leftPalmState.charAt(0)} `;
+  if (faceDetected) hud += "Face ";
   debugCtx.fillText(hud, 4, 12);
 }
 
