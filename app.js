@@ -766,9 +766,25 @@ async function startCamera() {
     });
     video.srcObject = stream;
     await video.play();
+
+    // Request mic permission explicitly (separate from camera)
+    let micGranted = false;
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStream.getTracks().forEach(t => t.stop());
+      micGranted = true;
+      console.log("[Voice] Microphone permission granted.");
+    } catch (micErr) {
+      console.warn("[Voice] Microphone permission denied:", micErr.message);
+    }
+
     cameraOverlay.classList.add("hidden");
     initMediaPipe();
-    initSpeechRecognition();
+
+    if (micGranted) {
+      initTFSpeechCommands();
+      initWebSpeechAPI();
+    }
   } catch (err) {
     console.error("Camera access denied:", err);
     enableBtn.textContent = "Camera Denied — Retry";
@@ -952,38 +968,48 @@ function togglePanel() {
 
 hamburger.addEventListener("click", togglePanel);
 
-// ─── Voice Commands (TensorFlow.js Speech Commands) ─────────────────────────
-// "go" / "right" → toggle menu open
-// "stop" / "left" → toggle menu closed
-// "up" → change background
-const VOICE_COMMANDS = {
-  go:    () => { if (!panelOpen) togglePanel(); },
-  right: () => { if (!panelOpen) togglePanel(); },
-  stop:  () => { if (panelOpen) togglePanel(); },
-  left:  () => { if (panelOpen) togglePanel(); },
-  up:    () => { if (!imageTransitioning) switchImage(); },
-};
-const VOICE_THRESHOLD   = 0.88;
-const VOICE_COOLDOWN_MS = 1200;
+// ─── Voice Commands ─────────────────────────────────────────────────────────
+// Two systems run in parallel for reliability:
+//   1) TensorFlow.js Speech Commands (keywords: "go"→menu, "up"→background)
+//   2) Web Speech API (natural phrases: "open menu", "change background")
+let voiceActionTime = 0;
+const VOICE_COOLDOWN = 1500;
 
-async function initSpeechRecognition() {
+function voiceAction(label, fn) {
+  const now = performance.now();
+  if (now - voiceActionTime < VOICE_COOLDOWN) return;
+  voiceActionTime = now;
+  console.log(`%c[Voice] ACTION: ${label}`, "color:#0f0;font-weight:bold");
+  fn();
+}
+
+// ── TensorFlow.js Speech Commands (keyword spotting) ────────────────────────
+const TF_VOICE_MAP = {
+  go:    () => voiceAction("go → toggle menu",    togglePanel),
+  right: () => voiceAction("right → toggle menu",  togglePanel),
+  stop:  () => voiceAction("stop → toggle menu",   togglePanel),
+  left:  () => voiceAction("left → toggle menu",   togglePanel),
+  up:    () => voiceAction("up → switch image",     () => { if (!imageTransitioning) switchImage(); }),
+  down:  () => voiceAction("down → switch image",   () => { if (!imageTransitioning) switchImage(); }),
+};
+
+async function initTFSpeechCommands() {
   if (typeof speechCommands === "undefined") {
-    console.warn("TensorFlow Speech Commands not loaded.");
+    console.warn("[TF-Voice] speechCommands global not found — skipping.");
     return;
   }
 
+  console.log("[TF-Voice] Creating recognizer...");
   try {
     const recognizer = speechCommands.create("BROWSER_FFT");
+    console.log("[TF-Voice] Loading model...");
     await recognizer.ensureModelLoaded();
 
     const labels = recognizer.wordLabels();
-    let lastActionTime = 0;
+    console.log("[TF-Voice] Model ready. Vocabulary:", labels.join(", "));
 
     recognizer.listen(
       ({ scores }) => {
-        const now = performance.now();
-        if (now - lastActionTime < VOICE_COOLDOWN_MS) return;
-
         let bestIdx = 0;
         let bestScore = 0;
         for (let i = 0; i < scores.length; i++) {
@@ -993,25 +1019,91 @@ async function initSpeechRecognition() {
           }
         }
 
-        if (bestScore < VOICE_THRESHOLD) return;
-
         const word = labels[bestIdx];
-        const handler = VOICE_COMMANDS[word];
-        if (handler) {
-          lastActionTime = now;
-          handler();
-          console.log(`Voice: "${word}" (${(bestScore * 100).toFixed(0)}%)`);
+
+        if (bestScore > 0.6 && word !== "_background_noise_" && word !== "_unknown_") {
+          console.log(`[TF-Voice] Heard: "${word}" (${(bestScore * 100).toFixed(0)}%)`);
         }
+
+        if (bestScore < 0.85) return;
+
+        const handler = TF_VOICE_MAP[word];
+        if (handler) handler();
       },
       {
-        probabilityThreshold: 0.70,
+        probabilityThreshold: 0.60,
         invokeCallbackOnNoiseAndUnknown: false,
         overlapFactor: 0.5,
       }
     );
 
-    console.log("TensorFlow Speech Commands active. Words:", labels.join(", "));
+    console.log("[TF-Voice] Listening...");
   } catch (err) {
-    console.warn("Speech Commands init failed:", err);
+    console.error("[TF-Voice] Init failed:", err);
+  }
+}
+
+// ── Web Speech API (natural language phrases) ───────────────────────────────
+function initWebSpeechAPI() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    console.warn("[WebSpeech] Not supported in this browser.");
+    return;
+  }
+
+  console.log("[WebSpeech] Initializing...");
+  const recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+  recognition.maxAlternatives = 3;
+
+  function processTranscript(text) {
+    const t = text.toLowerCase().trim();
+    if (!t) return;
+
+    console.log(`[WebSpeech] Transcript: "${t}"`);
+
+    if (/open|show|go/.test(t) && /menu|panel|nav/.test(t)) {
+      if (!panelOpen) voiceAction("open menu (speech)", togglePanel);
+    } else if (/close|hide|stop/.test(t) && /menu|panel|nav/.test(t)) {
+      if (panelOpen) voiceAction("close menu (speech)", togglePanel);
+    } else if (/change|switch|swap|next/.test(t) && /back|image|photo|picture/.test(t)) {
+      voiceAction("change background (speech)", () => { if (!imageTransitioning) switchImage(); });
+    }
+  }
+
+  recognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      for (let a = 0; a < result.length; a++) {
+        processTranscript(result[a].transcript);
+      }
+    }
+  };
+
+  recognition.onstart = () => {
+    console.log("[WebSpeech] Listening...");
+  };
+
+  recognition.onend = () => {
+    console.log("[WebSpeech] Ended — restarting...");
+    try { recognition.start(); } catch (_) {}
+  };
+
+  recognition.onerror = (e) => {
+    console.warn(`[WebSpeech] Error: ${e.error}`);
+    if (e.error === "not-allowed") return;
+    if (e.error !== "no-speech" && e.error !== "aborted") {
+      setTimeout(() => {
+        try { recognition.start(); } catch (_) {}
+      }, 1000);
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch (err) {
+    console.warn("[WebSpeech] Could not start:", err);
   }
 }
