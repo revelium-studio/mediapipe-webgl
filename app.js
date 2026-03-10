@@ -969,25 +969,40 @@ hamburger.addEventListener("click", togglePanel);
 
 // ─── Voice Commands (Whisper local speech-to-text via transformers.js) ──────
 // Say "open menu" / "close menu" / "change background" / "switch background"
+// Transcripts are buffered in a sliding window so multi-chunk phrases match.
 let voiceActionTime = 0;
 const VOICE_COOLDOWN = 1200;
+const VOICE_BUFFER_WINDOW = 3000;
+const voiceBuffer = [];
 
-function matchVoiceCommand(text) {
+function pushTranscript(text) {
+  const now = performance.now();
+  voiceBuffer.push({ text: text.toLowerCase().replace(/[^a-z ]/g, "").trim(), time: now });
+  while (voiceBuffer.length && now - voiceBuffer[0].time > VOICE_BUFFER_WINDOW) voiceBuffer.shift();
+
+  const combined = voiceBuffer.map((b) => b.text).join(" ");
+  console.log(`[Voice] Buffer: "${combined}"`);
+  matchVoiceCommand(combined);
+}
+
+function matchVoiceCommand(combined) {
   const now = performance.now();
   if (now - voiceActionTime < VOICE_COOLDOWN) return;
-  const t = text.toLowerCase();
 
-  if (/open.*menu|show.*menu/.test(t) && !panelOpen) {
+  if (/open.*menu|show.*menu/.test(combined) && !panelOpen) {
     voiceActionTime = now;
+    voiceBuffer.length = 0;
     console.log("%c[Voice] ACTION: open menu", "color:#0f0;font-weight:bold");
     togglePanel();
-  } else if (/close.*menu|hide.*menu/.test(t) && panelOpen) {
+  } else if (/close.*menu|hide.*menu/.test(combined) && panelOpen) {
     voiceActionTime = now;
+    voiceBuffer.length = 0;
     console.log("%c[Voice] ACTION: close menu", "color:#0f0;font-weight:bold");
     togglePanel();
-  } else if (/change.*back|switch.*back|change.*image|switch.*image/.test(t)) {
+  } else if (/change.*back|switch.*back|change.*image|switch.*image/.test(combined)) {
     if (!imageTransitioning) {
       voiceActionTime = now;
+      voiceBuffer.length = 0;
       console.log("%c[Voice] ACTION: change background", "color:#0f0;font-weight:bold");
       switchImage();
     }
@@ -1013,7 +1028,7 @@ async function initSpeechRecognition() {
         break;
       case "result":
         console.log(`[Voice] Heard: "${e.data.text}"`);
-        matchVoiceCommand(e.data.text);
+        pushTranscript(e.data.text);
         break;
       case "error":
         console.error(`[Voice] Error: ${e.data.msg}`);
