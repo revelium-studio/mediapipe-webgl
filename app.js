@@ -176,9 +176,9 @@ let pinchStartAngle = 0;
 let lastSpread = 1.0;
 let lastRotAngle = 0;
 
-// Face tracking state
-const filterYaw   = new OneEuroFilter(30, 0.3, 0.5, 1.0);
-const filterPitch = new OneEuroFilter(30, 0.3, 0.5, 1.0);
+// Face tracking state (high minCutoff + beta for low-latency response)
+const filterYaw   = new OneEuroFilter(30, 1.2, 1.5, 1.0);
+const filterPitch = new OneEuroFilter(30, 1.2, 1.5, 1.0);
 let faceDetected = false;
 let wasBlinking  = false;
 
@@ -691,9 +691,9 @@ function updateAIFace(yaw, pitch, blinking) {
   const mouthX = yaw   * AI_MOUTH_MAX_OFFSET;
   const mouthY = -pitch * AI_MOUTH_MAX_OFFSET;
 
-  gsap.to(aiEyeLeft,  { x: eyeX, y: eyeY, duration: 0.12, overwrite: true });
-  gsap.to(aiEyeRight, { x: eyeX, y: eyeY, duration: 0.12, overwrite: true });
-  gsap.to(aiMouth,    { x: mouthX, y: mouthY, duration: 0.12, overwrite: true });
+  gsap.set(aiEyeLeft,  { x: eyeX, y: eyeY });
+  gsap.set(aiEyeRight, { x: eyeX, y: eyeY });
+  gsap.set(aiMouth,    { x: mouthX, y: mouthY });
 
   if (blinking && !wasBlinking) {
     gsap.to([aiEyeLeft, aiEyeRight], {
@@ -788,14 +788,10 @@ function initMediaPipe() {
   debugCanvas.width  = 200;
   debugCanvas.height = 150;
 
-  let frameIdx = 0;
   const camera = new Camera(video, {
     onFrame: async () => {
       await hands.send({ image: video });
-      if (frameIdx % 2 === 0) {
-        await faceMesh.send({ image: video });
-      }
-      frameIdx++;
+      await faceMesh.send({ image: video });
     },
     width: 640,
     height: 480,
@@ -934,3 +930,39 @@ function togglePanel() {
 }
 
 hamburger.addEventListener("click", togglePanel);
+
+// ─── Voice Commands (Web Speech API) ────────────────────────────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (SpeechRecognition) {
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (!event.results[i].isFinal) continue;
+      const transcript = event.results[i][0].transcript.toLowerCase().trim();
+
+      if (/open.*menu|show.*menu/.test(transcript) && !panelOpen) {
+        togglePanel();
+      } else if (/close.*menu|hide.*menu/.test(transcript) && panelOpen) {
+        togglePanel();
+      } else if (/change.*background|switch.*background|change.*image|switch.*image/.test(transcript)) {
+        if (!imageTransitioning) switchImage();
+      }
+    }
+  };
+
+  recognition.onend = () => { recognition.start(); };
+  recognition.onerror = (e) => {
+    if (e.error !== "no-speech" && e.error !== "aborted") {
+      console.warn("Speech recognition error:", e.error);
+    }
+  };
+
+  recognition.start();
+} else {
+  console.warn("Web Speech API not supported in this browser.");
+}
