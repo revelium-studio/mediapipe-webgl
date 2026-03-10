@@ -967,107 +967,81 @@ function togglePanel() {
 
 hamburger.addEventListener("click", togglePanel);
 
-// ─── Voice Commands (Web Speech API) ────────────────────────────────────────
-// Say "open menu" / "close menu" / "change background" / "switch background"
-let voiceActionTime = 0;
-const VOICE_COOLDOWN = 2000;
+// ─── Voice Commands (TensorFlow.js Speech Commands — local, no server) ──────
+// Say "right" → toggle menu | "up" → change background
+// Consecutive-detection: same word must be heard 2× within 1.2s to trigger
+const VOICE_ACTIONS = {
+  right: () => togglePanel(),
+  up:    () => { if (!imageTransitioning) switchImage(); },
+};
+const VOICE_CONFIRM_COUNT  = 2;
+const VOICE_CONFIRM_WINDOW = 1200;
+const VOICE_COOLDOWN       = 2500;
+const VOICE_THRESHOLD      = 0.92;
 
-function voiceAction(label, fn) {
-  const now = performance.now();
-  if (now - voiceActionTime < VOICE_COOLDOWN) return false;
-  voiceActionTime = now;
-  console.log(`%c[Voice] ACTION: ${label}`, "color:#0f0;font-weight:bold");
-  fn();
-  return true;
-}
-
-function matchVoiceCommand(text) {
-  const t = text.toLowerCase().trim();
-  if (t.length < 3) return;
-
-  if (/open\s*(the\s*)?menu/.test(t) || /show\s*(the\s*)?menu/.test(t)) {
-    return voiceAction("open menu", () => { if (!panelOpen) togglePanel(); });
-  }
-  if (/close\s*(the\s*)?menu/.test(t) || /hide\s*(the\s*)?menu/.test(t)) {
-    return voiceAction("close menu", () => { if (panelOpen) togglePanel(); });
-  }
-  if (/change\s*(the\s*)?back/.test(t) || /switch\s*(the\s*)?back/.test(t) ||
-      /change\s*(the\s*)?image/.test(t) || /switch\s*(the\s*)?image/.test(t) ||
-      /next\s*(the\s*)?back/.test(t) || /next\s*image/.test(t)) {
-    return voiceAction("change background", () => { if (!imageTransitioning) switchImage(); });
-  }
-  return false;
-}
-
-function initSpeechRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    console.warn("[Voice] SpeechRecognition not supported.");
+async function initSpeechRecognition() {
+  if (typeof speechCommands === "undefined") {
+    console.warn("[Voice] TF Speech Commands not loaded.");
     return;
   }
 
-  const recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
-  recognition.maxAlternatives = 1;
-
-  let retryDelay = 500;
-  let firedForCurrent = false;
-
-  recognition.onresult = (event) => {
-    retryDelay = 500;
-
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      const isFinal = event.results[i].isFinal;
-
-      if (isFinal) {
-        console.log(`[Voice] Final: "${transcript}"`);
-        firedForCurrent = false;
-      } else if (!firedForCurrent) {
-        console.log(`[Voice] Interim: "${transcript}"`);
-      }
-
-      if (!firedForCurrent && matchVoiceCommand(transcript)) {
-        firedForCurrent = true;
-      }
-
-      if (isFinal) firedForCurrent = false;
-    }
-  };
-
-  recognition.onstart = () => {
-    console.log("[Voice] Listening...");
-  };
-
-  recognition.onend = () => {
-    setTimeout(() => {
-      try { recognition.start(); } catch (_) {}
-    }, 100);
-  };
-
-  recognition.onerror = (e) => {
-    if (e.error === "not-allowed") {
-      console.error("[Voice] Mic permission denied.");
-      return;
-    }
-    if (e.error === "network") {
-      retryDelay = Math.min(retryDelay * 1.5, 8000);
-      setTimeout(() => {
-        try { recognition.start(); } catch (_) {}
-      }, retryDelay);
-      return;
-    }
-    if (e.error !== "no-speech" && e.error !== "aborted") {
-      console.warn("[Voice] Error:", e.error);
-    }
-  };
+  console.log("[Voice] Loading TF Speech Commands model...");
 
   try {
-    recognition.start();
-    console.log("[Voice] Initialized.");
+    const recognizer = speechCommands.create("BROWSER_FFT");
+    await recognizer.ensureModelLoaded();
+
+    const labels = recognizer.wordLabels();
+    console.log("[Voice] Model ready. Vocabulary:", labels.join(", "));
+
+    const hitLog = {};
+    let lastActionTime = 0;
+
+    recognizer.listen(
+      ({ scores }) => {
+        const now = performance.now();
+        if (now - lastActionTime < VOICE_COOLDOWN) return;
+
+        let bestIdx = 0;
+        let bestScore = 0;
+        for (let i = 0; i < scores.length; i++) {
+          if (scores[i] > bestScore) {
+            bestScore = scores[i];
+            bestIdx = i;
+          }
+        }
+
+        const word = labels[bestIdx];
+
+        if (word === "_background_noise_" || word === "_unknown_") return;
+
+        if (bestScore > 0.75) {
+          console.log(`[Voice] Heard: "${word}" (${(bestScore * 100).toFixed(0)}%)`);
+        }
+
+        if (bestScore < VOICE_THRESHOLD) return;
+        if (!VOICE_ACTIONS[word]) return;
+
+        if (!hitLog[word]) hitLog[word] = [];
+        hitLog[word].push(now);
+        hitLog[word] = hitLog[word].filter(t => now - t < VOICE_CONFIRM_WINDOW);
+
+        if (hitLog[word].length >= VOICE_CONFIRM_COUNT) {
+          hitLog[word] = [];
+          lastActionTime = now;
+          console.log(`%c[Voice] ACTION: "${word}"`, "color:#0f0;font-weight:bold");
+          VOICE_ACTIONS[word]();
+        }
+      },
+      {
+        probabilityThreshold: 0.65,
+        invokeCallbackOnNoiseAndUnknown: false,
+        overlapFactor: 0.6,
+      }
+    );
+
+    console.log("[Voice] Listening. Say 'right' (menu) or 'up' (background).");
   } catch (err) {
-    console.warn("[Voice] Could not start:", err);
+    console.error("[Voice] Init failed:", err);
   }
 }
