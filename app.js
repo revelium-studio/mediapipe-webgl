@@ -25,8 +25,8 @@ const PALM_INDICES = [0, 1, 5, 9, 13, 17];
 
 // Face Mesh / AI assistant config
 const BLINK_THRESHOLD     = 0.21;
-const AI_EYE_MAX_OFFSET   = 12;
-const AI_MOUTH_MAX_OFFSET = 8;
+const AI_EYE_MAX_OFFSET   = 16;
+const AI_MOUTH_MAX_OFFSET = 10;
 const PITCH_REST_OFFSET   = 0.17;
 const EAR_RIGHT_INDICES   = [33, 160, 158, 133, 153, 144];
 const EAR_LEFT_INDICES    = [362, 385, 387, 263, 373, 380];
@@ -180,9 +180,9 @@ let lastSpread = 1.0;
 let lastRotAngle = 0;
 
 // Face tracking state (high minCutoff + beta for low-latency response)
-const filterYaw   = new OneEuroFilter(30, 1.2, 1.5, 1.0);
-const filterPitch = new OneEuroFilter(30, 1.2, 1.5, 1.0);
-const filterMouth = new OneEuroFilter(30, 1.5, 2.0, 1.0);
+const filterYaw   = new OneEuroFilter(60, 2.0, 3.0, 1.0);
+const filterPitch = new OneEuroFilter(60, 2.0, 3.0, 1.0);
+const filterMouth = new OneEuroFilter(60, 2.5, 3.5, 1.0);
 let faceDetected = false;
 let wasBlinking  = false;
 
@@ -970,7 +970,7 @@ hamburger.addEventListener("click", togglePanel);
 // ─── Voice Commands (Whisper local speech-to-text via transformers.js) ──────
 // Say "open menu" / "close menu" / "change background" / "switch background"
 let voiceActionTime = 0;
-const VOICE_COOLDOWN = 2000;
+const VOICE_COOLDOWN = 1200;
 
 function matchVoiceCommand(text) {
   const now = performance.now();
@@ -1053,7 +1053,7 @@ async function startVoiceCapture(worker) {
     setInterval(() => {
       recorder.stop();
       recorder.start();
-    }, 1500);
+    }, 800);
 
     console.log('[Voice] Listening. Say "open menu" or "change background".');
   } catch (err) {
