@@ -218,6 +218,43 @@ html, body {
   opacity: 1;
 }
 
+/* ── Heading (centered, vw sizing) ─────────────────── */
+.heading {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.heading img {
+  width: 50vw;
+  height: auto;
+  display: block;
+}
+
+/* ── Floating elements (above heading) ─────────────── */
+.floating-el {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 15;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.floating-el img {
+  display: block;
+  height: auto;
+}
+
+.floating-el[data-el="0"] img { width: 8vw; }
+.floating-el[data-el="1"] img { width: 14vw; }
+.floating-el[data-el="2"] img { width: 7vw; }
+.floating-el[data-el="3"] img { width: 8vw; }
+.floating-el[data-el="4"] img { width: 14vw; }
+
 /* ── Hand cursor ─────────────────────────────────────── */
 .hand-cursor {
   position: fixed;

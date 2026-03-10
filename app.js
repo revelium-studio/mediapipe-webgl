@@ -8,6 +8,18 @@ const PALM_HYSTERESIS     = 0.005;
 const HAND_LERP           = 0.15;
 const IMAGE_PATH          = "images/test-1.jpg";
 
+const PINCH_THRESHOLD     = 0.09;
+const SPREAD_LERP         = 0.1;
+const ROTATION_LERP       = 0.1;
+
+const EL_BASE_OFFSETS = [
+  { x: -110, y: -65 },
+  { x:  120, y: -35 },
+  { x:  -45, y:  75 },
+  { x:   85, y:  55 },
+  { x:  -25, y: -105 },
+];
+
 // ─── One Euro Filter ───────────────────────────────────────────────────────
 class OneEuroFilter {
   constructor(freq = 30, minCutoff = 0.4, beta = 0.6, dCutoff = 1.0) {
@@ -53,13 +65,14 @@ const handCursor    = document.getElementById("hand-cursor");
 const cameraOverlay = document.getElementById("camera-overlay");
 const enableBtn     = document.getElementById("enable-camera-btn");
 
-// GUI controls
 const ctrlRadius   = document.getElementById("ctrl-radius");
 const ctrlStrength = document.getElementById("ctrl-strength");
 const ctrlFalloff  = document.getElementById("ctrl-falloff");
 const valRadius    = document.getElementById("val-radius");
 const valStrength  = document.getElementById("val-strength");
 const valFalloff   = document.getElementById("val-falloff");
+
+const elDoms = document.querySelectorAll(".floating-el");
 
 // Bulge params from sliders
 let bulgeRadius   = parseFloat(ctrlRadius.value);
@@ -79,8 +92,12 @@ ctrlFalloff.addEventListener("input", () => {
   valFalloff.textContent = bulgeFalloff.toFixed(1);
 });
 
-// GSAP: set panel off-screen initially
+// GSAP: set panel off-screen, position floating els at their default offsets
 gsap.set(panel, { xPercent: 100 });
+elDoms.forEach((el, i) => {
+  const off = EL_BASE_OFFSETS[i];
+  gsap.set(el, { xPercent: -50, yPercent: -50, x: off.x, y: off.y });
+});
 
 // ─── State ──────────────────────────────────────────────────────────────────
 const filterRX = new OneEuroFilter(30, 0.35, 0.7, 1.0);
@@ -101,6 +118,17 @@ let palmState = "unknown";
 let lastPalmFlipTime = 0;
 
 let panelOpen = false;
+
+// Bi-manual pinch state
+let rightHandLm = null;
+let leftHandLm  = null;
+let bothPinching = false;
+let pinchStartDist  = 0;
+let pinchStartAngle = 0;
+let targetSpread    = 1.0;
+let targetRotAngle  = 0;
+let currentSpread   = 1.0;
+let currentRotAngle = 0;
 
 // ─── WebGL Setup ────────────────────────────────────────────────────────────
 const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
@@ -148,7 +176,6 @@ const fragSrc = `
     vec2 uv = v_texCoord;
     float ar = u_resolution.x / u_resolution.y;
 
-    // Bulge distortion centered on right hand
     if (u_handActive > 0.5) {
       vec2 diff = uv - u_hand;
       vec2 corrDiff = vec2(diff.x * ar, diff.y);
@@ -161,7 +188,6 @@ const fragSrc = `
       }
     }
 
-    // Chromatic aberration (left hand controls intensity)
     if (u_caIntensity > 0.01) {
       vec2 fromCenter = uv - 0.5;
       float dist = length(fromCenter);
@@ -268,9 +294,26 @@ resize();
 function render() {
   currentCA += (targetCA - currentCA) * CA_LERP;
 
-  // Smoothly interpolate the hand position for the shader
   smoothHandX += (rightX - smoothHandX) * HAND_LERP;
   smoothHandY += (rightY - smoothHandY) * HAND_LERP;
+
+  // Update floating elements during bi-manual pinch
+  if (bothPinching) {
+    currentSpread   += (targetSpread   - currentSpread)   * SPREAD_LERP;
+    currentRotAngle += (targetRotAngle - currentRotAngle) * ROTATION_LERP;
+
+    const cos = Math.cos(currentRotAngle);
+    const sin = Math.sin(currentRotAngle);
+
+    elDoms.forEach((el, i) => {
+      const base = EL_BASE_OFFSETS[i];
+      const sx = base.x * currentSpread;
+      const sy = base.y * currentSpread;
+      const rx = sx * cos - sy * sin;
+      const ry = sx * sin + sy * cos;
+      gsap.set(el, { x: rx, y: ry });
+    });
+  }
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, imageTex);
@@ -329,6 +372,74 @@ function checkPalmFlip(lm, now) {
   }
 
   palmState = newState;
+}
+
+// ─── Pinch helpers ──────────────────────────────────────────────────────────
+function getPinchDist(lm) {
+  const dx = lm[4].x - lm[8].x;
+  const dy = lm[4].y - lm[8].y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function getPinchMid(lm) {
+  return {
+    x: (lm[4].x + lm[8].x) / 2,
+    y: (lm[4].y + lm[8].y) / 2,
+  };
+}
+
+// ─── Bi-manual pinch-spread gesture ─────────────────────────────────────────
+function processBimanualPinch() {
+  if (!rightHandLm || !leftHandLm) {
+    if (bothPinching) {
+      bothPinching = false;
+      bounceElementsBack();
+    }
+    return;
+  }
+
+  const rPinch = getPinchDist(rightHandLm) < PINCH_THRESHOLD;
+  const lPinch = getPinchDist(leftHandLm)  < PINCH_THRESHOLD;
+
+  if (rPinch && lPinch) {
+    const rMid = getPinchMid(rightHandLm);
+    const lMid = getPinchMid(leftHandLm);
+
+    const dx = rMid.x - lMid.x;
+    const dy = rMid.y - lMid.y;
+    const dist  = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+
+    if (!bothPinching) {
+      bothPinching    = true;
+      pinchStartDist  = Math.max(dist, 0.01);
+      pinchStartAngle = angle;
+      currentSpread   = 1.0;
+      currentRotAngle = 0;
+      elDoms.forEach(el => gsap.killTweensOf(el));
+    }
+
+    targetSpread   = Math.max(0.2, dist / pinchStartDist);
+    targetRotAngle = angle - pinchStartAngle;
+  } else if (bothPinching) {
+    bothPinching = false;
+    bounceElementsBack();
+  }
+}
+
+function bounceElementsBack() {
+  targetSpread   = 1.0;
+  targetRotAngle = 0;
+
+  elDoms.forEach((el, i) => {
+    const base = EL_BASE_OFFSETS[i];
+    gsap.to(el, {
+      x: base.x,
+      y: base.y,
+      duration: 1.0,
+      ease: "elastic.out(1, 0.35)",
+    });
+  });
 }
 
 // ─── Camera Permission Flow ────────────────────────────────────────────────
@@ -392,11 +503,18 @@ function onHandResults(results) {
   const landmarks = results.multiHandLandmarks;
   const handedness = results.multiHandedness;
 
+  rightHandLm = null;
+  leftHandLm  = null;
+
   if (!landmarks || landmarks.length === 0) {
     rightDetected = false;
     leftDetected = false;
     handCursor.classList.remove("visible");
     targetCA *= 0.92;
+    if (bothPinching) {
+      bothPinching = false;
+      bounceElementsBack();
+    }
     return;
   }
 
@@ -414,6 +532,7 @@ function onHandResults(results) {
     if (isUserRight && !foundRight) {
       foundRight = true;
       rightDetected = true;
+      rightHandLm = lm;
 
       const rawX = remapX(1 - lm[8].x);
       const rawY = remapY(lm[8].y);
@@ -437,6 +556,7 @@ function onHandResults(results) {
     if (isUserLeft && !foundLeft) {
       foundLeft = true;
       leftDetected = true;
+      leftHandLm = lm;
 
       const rawY = remapY(lm[8].y);
       leftY = filterLY.filter(rawY, now);
@@ -461,6 +581,9 @@ function onHandResults(results) {
     targetCA *= 0.92;
   }
 
+  // Process bi-manual pinch gesture
+  processBimanualPinch();
+
   // Debug HUD
   debugCtx.fillStyle = "rgba(0,0,0,0.55)";
   debugCtx.fillRect(0, 0, debugCanvas.width, 18);
@@ -469,6 +592,7 @@ function onHandResults(results) {
   let hud = "";
   if (rightDetected) hud += "R:bulge ";
   if (leftDetected) hud += `L:CA=${currentCA.toFixed(1)} `;
+  if (bothPinching) hud += `spread:${currentSpread.toFixed(2)} `;
   if (palmState !== "unknown") hud += `palm:${palmState.charAt(0)}`;
   debugCtx.fillText(hud, 4, 12);
 }
