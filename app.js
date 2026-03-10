@@ -30,6 +30,9 @@ const AI_MOUTH_MAX_OFFSET = 8;
 const PITCH_REST_OFFSET   = 0.17;
 const EAR_RIGHT_INDICES   = [33, 160, 158, 133, 153, 144];
 const EAR_LEFT_INDICES    = [362, 385, 387, 263, 373, 380];
+const MOUTH_OPEN_INDICES  = { top: 13, bottom: 14, left: 61, right: 291 };
+const MOUTH_REST_CY       = 64;
+const MOUTH_OPEN_CY       = 74;
 
 const EL_BASE_OFFSETS = [
   { x: -210, y: -140 },
@@ -179,6 +182,7 @@ let lastRotAngle = 0;
 // Face tracking state (high minCutoff + beta for low-latency response)
 const filterYaw   = new OneEuroFilter(30, 1.2, 1.5, 1.0);
 const filterPitch = new OneEuroFilter(30, 1.2, 1.5, 1.0);
+const filterMouth = new OneEuroFilter(30, 1.5, 2.0, 1.0);
 let faceDetected = false;
 let wasBlinking  = false;
 
@@ -685,7 +689,17 @@ function getHeadPose(lm) {
   return { yaw: rawYaw, pitch: rawPitch };
 }
 
-function updateAIFace(yaw, pitch, blinking) {
+function getMouthOpenness(lm) {
+  const top = lm[MOUTH_OPEN_INDICES.top];
+  const bot = lm[MOUTH_OPEN_INDICES.bottom];
+  const left = lm[MOUTH_OPEN_INDICES.left];
+  const right = lm[MOUTH_OPEN_INDICES.right];
+  const vDist = Math.sqrt((top.x - bot.x) ** 2 + (top.y - bot.y) ** 2);
+  const hDist = Math.sqrt((left.x - right.x) ** 2 + (left.y - right.y) ** 2);
+  return vDist / (hDist || 0.001);
+}
+
+function updateAIFace(yaw, pitch, blinking, mouthOpen) {
   const eyeX   = yaw   * AI_EYE_MAX_OFFSET;
   const eyeY   = -pitch * AI_EYE_MAX_OFFSET;
   const mouthX = yaw   * AI_MOUTH_MAX_OFFSET;
@@ -694,6 +708,9 @@ function updateAIFace(yaw, pitch, blinking) {
   gsap.set(aiEyeLeft,  { x: eyeX, y: eyeY });
   gsap.set(aiEyeRight, { x: eyeX, y: eyeY });
   gsap.set(aiMouth,    { x: mouthX, y: mouthY });
+
+  const cy = MOUTH_REST_CY + mouthOpen * (MOUTH_OPEN_CY - MOUTH_REST_CY);
+  aiMouth.setAttribute("d", `M 38 60 Q 50 ${cy.toFixed(1)} 62 60`);
 
   if (blinking && !wasBlinking) {
     gsap.to([aiEyeLeft, aiEyeRight], {
@@ -730,7 +747,10 @@ function onFaceResults(results) {
   const earR     = getEAR(lm, EAR_RIGHT_INDICES);
   const blinking = ((earL + earR) / 2) < BLINK_THRESHOLD;
 
-  updateAIFace(yaw, pitch, blinking);
+  const rawMouth = getMouthOpenness(lm);
+  const mouthOpen = filterMouth.filter(Math.min(1, rawMouth * 3.0), now);
+
+  updateAIFace(yaw, pitch, blinking, mouthOpen);
 }
 
 // ─── Camera Permission Flow ────────────────────────────────────────────────
@@ -743,14 +763,16 @@ async function startCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: "user" },
+      audio: true,
     });
-    video.srcObject = stream;
+    video.srcObject = new MediaStream(stream.getVideoTracks());
     await video.play();
     cameraOverlay.classList.add("hidden");
     initMediaPipe();
+    initSpeechRecognition();
   } catch (err) {
-    console.error("Camera access denied:", err);
-    enableBtn.textContent = "Camera Denied — Retry";
+    console.error("Camera/mic access denied:", err);
+    enableBtn.textContent = "Permission Denied — Retry";
     enableBtn.disabled = false;
   }
 }
@@ -932,37 +954,68 @@ function togglePanel() {
 hamburger.addEventListener("click", togglePanel);
 
 // ─── Voice Commands (Web Speech API) ────────────────────────────────────────
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+function initSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    console.warn("Web Speech API not supported in this browser.");
+    return;
+  }
 
-if (SpeechRecognition) {
-  const recognition = new SpeechRecognition();
+  const recognition = new SR();
   recognition.continuous = true;
-  recognition.interimResults = false;
+  recognition.interimResults = true;
   recognition.lang = "en-US";
+  recognition.maxAlternatives = 3;
+
+  let lastActionTime = 0;
+  const ACTION_COOLDOWN = 1500;
+
+  function tryCommand(text, now) {
+    if (now - lastActionTime < ACTION_COOLDOWN) return;
+    const t = text.toLowerCase().trim();
+
+    if (/open.*(menu|panel)|show.*(menu|panel)/.test(t) && !panelOpen) {
+      lastActionTime = now;
+      togglePanel();
+    } else if (/close.*(menu|panel)|hide.*(menu|panel)/.test(t) && panelOpen) {
+      lastActionTime = now;
+      togglePanel();
+    } else if (/change.*(background|image)|switch.*(background|image)/.test(t)) {
+      if (!imageTransitioning) {
+        lastActionTime = now;
+        switchImage();
+      }
+    }
+  }
 
   recognition.onresult = (event) => {
+    const now = performance.now();
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (!event.results[i].isFinal) continue;
-      const transcript = event.results[i][0].transcript.toLowerCase().trim();
-
-      if (/open.*menu|show.*menu/.test(transcript) && !panelOpen) {
-        togglePanel();
-      } else if (/close.*menu|hide.*menu/.test(transcript) && panelOpen) {
-        togglePanel();
-      } else if (/change.*background|switch.*background|change.*image|switch.*image/.test(transcript)) {
-        if (!imageTransitioning) switchImage();
+      const result = event.results[i];
+      for (let a = 0; a < result.length; a++) {
+        tryCommand(result[a].transcript, now);
       }
     }
   };
 
-  recognition.onend = () => { recognition.start(); };
+  recognition.onend = () => {
+    try { recognition.start(); } catch (_) {}
+  };
+
   recognition.onerror = (e) => {
+    if (e.error === "not-allowed") {
+      console.warn("Microphone permission denied for speech recognition.");
+      return;
+    }
     if (e.error !== "no-speech" && e.error !== "aborted") {
       console.warn("Speech recognition error:", e.error);
     }
   };
 
-  recognition.start();
-} else {
-  console.warn("Web Speech API not supported in this browser.");
+  try {
+    recognition.start();
+    console.log("Speech recognition started.");
+  } catch (err) {
+    console.warn("Could not start speech recognition:", err);
+  }
 }
