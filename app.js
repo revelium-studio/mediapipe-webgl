@@ -1136,16 +1136,26 @@ function initDemo2() {
   demo2Ready = true;
 
   const cvs = document.getElementById("sphere-canvas");
+  requestAnimationFrame(() => {
+    const w = Math.max(1, cvs.clientWidth || window.innerWidth);
+    const h = Math.max(1, cvs.clientHeight || window.innerHeight);
+    cvs.width = w;
+    cvs.height = h;
+    _initDemo2Core(cvs, w, h);
+  });
+}
+
+function _initDemo2Core(cvs, w, h) {
   d2Scene = new THREE.Scene();
   d2Scene.background = new THREE.Color(0xffffff);
 
-  d2Camera = new THREE.PerspectiveCamera(d2Fov, window.innerWidth / window.innerHeight, 0.1, 200);
+  d2Camera = new THREE.PerspectiveCamera(d2Anim.fov, w / h, 0.1, 200);
   d2Camera.position.set(10, 5, 22);
   d2Camera.lookAt(0, -2, 0);
 
   d2Renderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true, alpha: false });
   d2Renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  d2Renderer.setSize(window.innerWidth, window.innerHeight);
+  d2Renderer.setSize(w, h);
   d2Renderer.sortObjects = false;
 
   d2Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -1169,7 +1179,7 @@ function initDemo2() {
   }
 
   D2_IMG_PATHS.forEach((url, i) => {
-    loader.load(url, (tex) => {
+    loader.load(encodeURI(url), (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       for (let j = i; j < D2_TOTAL_SLOTS; j += D2_IMG_PATHS.length) {
         if (d2Meshes[j]) {
@@ -1183,15 +1193,17 @@ function initDemo2() {
 
   window.addEventListener("resize", () => {
     if (!d2Camera) return;
-    d2Camera.aspect = window.innerWidth / window.innerHeight;
+    const rw = Math.max(1, window.innerWidth);
+    const rh = Math.max(1, window.innerHeight);
+    d2Camera.aspect = rw / rh;
     d2Camera.updateProjectionMatrix();
-    d2Renderer.setSize(window.innerWidth, window.innerHeight);
+    d2Renderer.setSize(rw, rh);
   });
 }
 
 function renderDemo2Loop() {
-  if (activeDemo !== 2 || !d2Scene) return;
   requestAnimationFrame(renderDemo2Loop);
+  if (activeDemo !== 2 || !d2Scene) return;
 
   d2Phase += D2_BASE_SPEED;
 
