@@ -878,7 +878,13 @@ function onHandResults(results) {
   leftHandLm  = null;
 
   // Draw hands: 3D gloves (WiggleBones) when ready, else 2D ghost
-  const useGloves = ghostHandsEnabled && window.glovesHand?.isGlovesReady();
+  const glovesAvailable = window.glovesHand?.isGlovesReady();
+  const useGloves = ghostHandsEnabled && glovesAvailable;
+  if (!window._glovesLogCount) window._glovesLogCount = 0;
+  if (window._glovesLogCount < 10) {
+    console.log("[HandPath] ghostEnabled:", ghostHandsEnabled, "glovesAvailable:", glovesAvailable, "useGloves:", useGloves, "landmarks:", landmarks?.length || 0);
+    window._glovesLogCount++;
+  }
   if (useGloves) {
     window.glovesHand.updateGloves(landmarks);
   } else {
