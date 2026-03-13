@@ -127,20 +127,23 @@ const aiEyeLeft  = document.getElementById("ai-eye-left");
 const aiEyeRight = document.getElementById("ai-eye-right");
 const aiMouth    = document.getElementById("ai-mouth");
 
-const ghostCanvas = document.getElementById("ghost-canvas");
-const ghostCtx    = ghostCanvas.getContext("2d");
-const ctrlGhost   = document.getElementById("ctrl-ghost");
+const ghostCanvas  = document.getElementById("ghost-canvas");
+const ghostCtx     = ghostCanvas.getContext("2d");
+const glovesCanvas = document.getElementById("gloves-canvas");
+const ctrlGhost    = document.getElementById("ctrl-ghost");
 let ghostHandsEnabled = true;
 
 ctrlGhost.addEventListener("change", () => {
   ghostHandsEnabled = ctrlGhost.checked;
+  window.glovesHand?.setGlovesEnabled(ctrlGhost.checked);
   if (!ghostHandsEnabled) ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
 });
 
-window.enableGhostHands  = () => { ghostHandsEnabled = true;  ctrlGhost.checked = true; };
+window.enableGhostHands  = () => { ghostHandsEnabled = true;  ctrlGhost.checked = true; window.glovesHand?.setGlovesEnabled(true); };
 window.disableGhostHands = () => {
   ghostHandsEnabled = false;
   ctrlGhost.checked = false;
+  window.glovesHand?.setGlovesEnabled(false);
   ghostCtx.clearRect(0, 0, ghostCanvas.width, ghostCanvas.height);
 };
 
@@ -803,6 +806,7 @@ async function startCamera() {
 
     cameraOverlay.classList.add("hidden");
     initMediaPipe();
+    window.glovesHand?.initGloves(glovesCanvas);
 
     if (micGranted) {
       initSpeechRecognition();
@@ -873,8 +877,14 @@ function onHandResults(results) {
   rightHandLm = null;
   leftHandLm  = null;
 
-  // Draw ghost hands (uses raw landmarks before any processing)
-  renderGhostHands(landmarks);
+  // Draw hands: 3D gloves (WiggleBones) when ready, else 2D ghost
+  const useGloves = ghostHandsEnabled && window.glovesHand?.isGlovesReady();
+  if (useGloves) {
+    window.glovesHand.updateGloves(landmarks);
+  } else {
+    window.glovesHand?.clearGloves?.();
+    renderGhostHands(landmarks);
+  }
 
   if (!landmarks || landmarks.length === 0) {
     rightDetected = false;

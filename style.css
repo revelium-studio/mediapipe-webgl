@@ -170,13 +170,23 @@ html, body {
   will-change: transform, opacity;
 }
 
-/* ── Ghost hands overlay ───────────────────────────── */
+/* ── Ghost hands overlay (fallback) ──────────────────── */
 .ghost-canvas {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
   z-index: 20;
+  pointer-events: none;
+}
+
+/* ── 3D Gloves overlay (WiggleBones) ────────────────── */
+.gloves-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 21;
   pointer-events: none;
 }
 
@@ -381,6 +391,8 @@ body.demo2-active .floating-el,
 body.demo2-active .hand-cursor,
 body.demo2-active .img-transition,
 body.demo2-active .ai-assistant,
+body.demo2-active .ghost-canvas,
+body.demo2-active .gloves-canvas,
 body.demo3-active #webgl-canvas,
 body.demo3-active .controls,
 body.demo3-active .hamburger,
@@ -389,7 +401,9 @@ body.demo3-active .heading,
 body.demo3-active .floating-el,
 body.demo3-active .hand-cursor,
 body.demo3-active .img-transition,
-body.demo3-active .ai-assistant {
+body.demo3-active .ai-assistant,
+body.demo3-active .ghost-canvas,
+body.demo3-active .gloves-canvas {
   display: none !important;
 }
 

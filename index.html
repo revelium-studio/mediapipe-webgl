@@ -58,9 +58,9 @@
     </div>
     <div class="controls__divider"></div>
     <div class="controls__row">
-      <label for="ctrl-ghost">Ghost</label>
+      <label for="ctrl-ghost">Gloves</label>
       <input type="checkbox" id="ctrl-ghost" checked />
-      <span class="controls__val" style="opacity:0.4">hands</span>
+      <span class="controls__val" style="opacity:0.4">3D hands</span>
     </div>
   </div>
 
@@ -98,8 +98,10 @@
   <!-- Image transition overlay (scale+fade between backgrounds) -->
   <div id="img-transition" class="img-transition"></div>
 
-  <!-- Ghost hands overlay (full-screen, above content) -->
+  <!-- Ghost hands overlay (fallback when gloves not ready) -->
   <canvas id="ghost-canvas" class="ghost-canvas"></canvas>
+  <!-- 3D Gloves overlay (WiggleBones, replaces ghost when ready) -->
+  <canvas id="gloves-canvas" class="gloves-canvas"></canvas>
 
   <!-- AI Assistant sphere (bottom-left) -->
   <div id="ai-assistant" class="ai-assistant">
@@ -125,6 +127,7 @@
 
   <canvas id="debug-canvas" class="debug-canvas"></canvas>
 
+  <script type="module" src="gloves-bootstrap.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
