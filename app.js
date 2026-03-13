@@ -1100,31 +1100,25 @@ async function startVoiceCapture(worker) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ██  DEMO 2 — Image Sphere                                                  ██
+// ██  DEMO 2 — Interactive Spiral Images                                     ██
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const D2_IMAGE_COUNT     = 120;
-const D2_SPHERE_R_MIN    = 8;
-const D2_SPHERE_R_MAX    = 20;
-const D2_IMG_SIZE_MIN    = 1.2;
-const D2_IMG_SIZE_MAX    = 3.8;
-const D2_ZOOM_MIN        = 0.3;
-const D2_ZOOM_MAX        = 18;
-const D2_PINCH_THRESH    = 0.08;
-const D2_ORBIT_SPEED     = 4.0;
-const D2_LERP            = 0.10;
+const D2_IMG_COUNT       = 30;
+const D2_SPIRAL_TURNS    = 4;
+const D2_SPIRAL_HEIGHT   = 28;
+const D2_IMG_SIZE        = 2.2;
+const D2_LERP            = 0.08;
 
 const zoomFillEl = document.getElementById("zoom-fill");
 
 let demo2Ready = false;
-let sphereScene, sphereCamera, sphereRenderer;
+let d2Scene, d2Camera, d2Renderer;
+let d2Meshes = [];
+let d2Phase = 0;
 
-let d2Theta = 0, d2Phi = Math.PI / 2, d2Dist = 8;
-let d2TargetTheta = 0, d2TargetPhi = Math.PI / 2, d2TargetDist = 8;
-
-let d2RotPinching = false;
-let d2PrevRotX = null, d2PrevRotY = null;
-let d2ZoomRef = null;
+let d2Radius   = 5,   d2TargetRadius   = 5;
+let d2Speed    = 0.006, d2TargetSpeed  = 0.006;
+let d2Intensity = 1.0, d2TargetIntensity = 1.0;
 
 const D2_HAND_CONNS = [
   [0,1],[1,2],[2,3],[3,4],
@@ -1134,54 +1128,36 @@ const D2_HAND_CONNS = [
   [13,17],[0,17],[17,18],[18,19],[19,20],
 ];
 
-function seededRandom(seed) {
-  let s = seed;
-  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
-}
-
-function fibonacciSphere(n) {
-  const pts = [];
-  const ga = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (i / (n - 1)) * 2;
-    const r = Math.sqrt(1 - y * y);
-    const t = ga * i;
-    pts.push({ x: Math.cos(t) * r, y, z: Math.sin(t) * r });
-  }
-  return pts;
-}
-
 function initDemo2() {
   if (demo2Ready) return;
   demo2Ready = true;
 
   const cvs = document.getElementById("sphere-canvas");
-  sphereScene = new THREE.Scene();
-  sphereScene.background = new THREE.Color(0x060610);
+  d2Scene = new THREE.Scene();
+  d2Scene.background = new THREE.Color(0xf2f0ed);
 
-  sphereCamera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 200);
-  sphereRenderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true });
-  sphereRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  sphereRenderer.setSize(window.innerWidth, window.innerHeight);
+  d2Camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+  d2Camera.position.set(12, 6, 18);
+  d2Camera.lookAt(0, -1, 0);
 
-  sphereScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+  d2Renderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true });
+  d2Renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  d2Renderer.setSize(window.innerWidth, window.innerHeight);
+
+  d2Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
   const loader = new THREE.TextureLoader();
-  const positions = fibonacciSphere(D2_IMAGE_COUNT);
-  const rng = seededRandom(42);
+  const geo = new THREE.PlaneGeometry(D2_IMG_SIZE, D2_IMG_SIZE);
 
-  for (let i = 0; i < D2_IMAGE_COUNT; i++) {
-    const r = D2_SPHERE_R_MIN + rng() * (D2_SPHERE_R_MAX - D2_SPHERE_R_MIN);
-    const sz = D2_IMG_SIZE_MIN + rng() * (D2_IMG_SIZE_MAX - D2_IMG_SIZE_MIN);
-    const geo = new THREE.PlaneGeometry(sz, sz);
+  for (let i = 0; i < D2_IMG_COUNT; i++) {
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x222233,
+      color: 0xdddddd,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.92,
     });
 
-    const url = `https://picsum.photos/seed/s${i}/200/200.webp`;
+    const url = `https://picsum.photos/seed/sp${i}/200/200.webp`;
     loader.load(url, (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       mat.map = tex;
@@ -1189,46 +1165,48 @@ function initDemo2() {
       mat.needsUpdate = true;
     });
 
-    const p = positions[i];
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(p.x * r, p.y * r, p.z * r);
-    mesh.lookAt(0, 0, 0);
-    sphereScene.add(mesh);
+    d2Scene.add(mesh);
+    d2Meshes.push(mesh);
   }
 
   window.addEventListener("resize", () => {
-    if (!sphereCamera) return;
-    sphereCamera.aspect = window.innerWidth / window.innerHeight;
-    sphereCamera.updateProjectionMatrix();
-    sphereRenderer.setSize(window.innerWidth, window.innerHeight);
+    if (!d2Camera) return;
+    d2Camera.aspect = window.innerWidth / window.innerHeight;
+    d2Camera.updateProjectionMatrix();
+    d2Renderer.setSize(window.innerWidth, window.innerHeight);
   });
 }
 
-function updateZoomBar() {
-  const pct = 1 - (d2Dist - D2_ZOOM_MIN) / (D2_ZOOM_MAX - D2_ZOOM_MIN);
-  zoomFillEl.style.height = `${Math.max(0, Math.min(100, pct * 100))}%`;
-}
-
 function renderDemo2Loop() {
-  if (activeDemo !== 2 || !sphereScene) return;
+  if (activeDemo !== 2 || !d2Scene) return;
   requestAnimationFrame(renderDemo2Loop);
 
-  d2Theta += (d2TargetTheta - d2Theta) * D2_LERP;
-  d2Phi   += (d2TargetPhi   - d2Phi)   * D2_LERP;
-  d2Dist  += (d2TargetDist  - d2Dist)  * D2_LERP;
+  d2Radius    += (d2TargetRadius    - d2Radius)    * D2_LERP;
+  d2Speed     += (d2TargetSpeed     - d2Speed)     * D2_LERP;
+  d2Intensity += (d2TargetIntensity - d2Intensity) * D2_LERP;
 
-  sphereCamera.position.set(
-    d2Dist * Math.sin(d2Phi) * Math.sin(d2Theta),
-    d2Dist * Math.cos(d2Phi),
-    d2Dist * Math.sin(d2Phi) * Math.cos(d2Theta),
-  );
-  sphereCamera.lookAt(0, 0, 0);
+  d2Phase += d2Speed;
 
-  updateZoomBar();
-  sphereRenderer.render(sphereScene, sphereCamera);
+  for (let i = 0; i < d2Meshes.length; i++) {
+    const t = ((i / D2_IMG_COUNT) + d2Phase) % 1.0;
+    const angle = t * D2_SPIRAL_TURNS * Math.PI * 2;
+    const y = (t - 0.5) * D2_SPIRAL_HEIGHT;
+    const x = d2Radius * Math.cos(angle);
+    const z = d2Radius * Math.sin(angle);
+
+    d2Meshes[i].position.set(x, y, z);
+    d2Meshes[i].scale.setScalar(d2Intensity);
+    d2Meshes[i].lookAt(d2Camera.position);
+  }
+
+  const speedPct = Math.min(1, Math.abs(d2Speed) / 0.025);
+  zoomFillEl.style.height = `${speedPct * 100}%`;
+
+  d2Renderer.render(d2Scene, d2Camera);
 }
 
-function drawD2DebugHand(lm, color, label) {
+function drawD2DebugHand(lm, color, lines) {
   debugCtx.save();
   debugCtx.translate(debugCanvas.width, 0);
   debugCtx.scale(-1, 1);
@@ -1249,21 +1227,18 @@ function drawD2DebugHand(lm, color, label) {
     debugCtx.fill();
   }
 
-  const cx = lm[0].x * debugCanvas.width;
-  const cy = lm[0].y * debugCanvas.height + 14;
-  debugCtx.font = "bold 9px sans-serif";
-  debugCtx.fillText(label, cx - 14, cy);
+  debugCtx.font = "bold 8px sans-serif";
+  const cx = lm[9].x * debugCanvas.width;
+  let cy = lm[9].y * debugCanvas.height + 12;
+  for (const txt of lines) {
+    debugCtx.fillText(txt, cx - 20, cy);
+    cy += 10;
+  }
   debugCtx.restore();
 }
 
 function handleDemo2Hands(landmarks, handedness) {
-  if (!landmarks || landmarks.length === 0) {
-    d2RotPinching = false;
-    d2PrevRotX = null;
-    d2PrevRotY = null;
-    d2ZoomRef = null;
-    return;
-  }
+  if (!landmarks || landmarks.length === 0) return;
 
   let userLeft = null, userRight = null;
   for (let i = 0; i < landmarks.length; i++) {
@@ -1272,49 +1247,32 @@ function handleDemo2Hands(landmarks, handedness) {
     if (mpLabel === "Left"  && !userRight) userRight = landmarks[i];
   }
 
-  if (userLeft) drawD2DebugHand(userLeft, "rgba(0,255,120,0.9)", "ROTATING");
-  if (userRight) drawD2DebugHand(userRight, "rgba(255,230,50,0.9)", "ZOOM");
-
   if (userLeft) {
     const thumb = userLeft[4], idx = userLeft[8];
-    const pd = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
-    const pinching = pd < D2_PINCH_THRESH;
+    const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
 
-    if (pinching) {
-      const hx = 1 - userLeft[9].x;
-      const hy = userLeft[9].y;
-      if (d2RotPinching && d2PrevRotX !== null) {
-        const dx = (hx - d2PrevRotX) * D2_ORBIT_SPEED;
-        const dy = (hy - d2PrevRotY) * D2_ORBIT_SPEED;
-        d2TargetTheta += dx;
-        d2TargetPhi = Math.max(0.15, Math.min(Math.PI - 0.15, d2TargetPhi + dy));
-      }
-      d2PrevRotX = hx;
-      d2PrevRotY = hy;
-      d2RotPinching = true;
-    } else {
-      d2RotPinching = false;
-      d2PrevRotX = null;
-      d2PrevRotY = null;
-    }
-  } else {
-    d2RotPinching = false;
-    d2PrevRotX = null;
-    d2PrevRotY = null;
+    d2TargetRadius = 2 + spread * 60;
+    d2TargetRadius = Math.max(2, Math.min(14, d2TargetRadius));
+
+    const handY = 1 - userLeft[9].y;
+    d2TargetSpeed = 0.001 + handY * 0.024;
+    d2TargetSpeed = Math.max(0.001, Math.min(0.025, d2TargetSpeed));
+
+    drawD2DebugHand(userLeft, "rgba(0,255,120,0.9)", [
+      `RADIUS: ${Math.round(d2TargetRadius * 50)}`,
+      `SPEED: ${d2TargetSpeed.toFixed(4)}`,
+    ]);
   }
 
   if (userRight) {
     const thumb = userRight[4], idx = userRight[8];
     const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
 
-    if (d2ZoomRef === null) {
-      d2ZoomRef = spread;
-    } else {
-      const delta = (spread - d2ZoomRef) * 40;
-      d2TargetDist = Math.max(D2_ZOOM_MIN, Math.min(D2_ZOOM_MAX, d2TargetDist - delta));
-      d2ZoomRef = spread;
-    }
-  } else {
-    d2ZoomRef = null;
+    d2TargetIntensity = 0.3 + spread * 8;
+    d2TargetIntensity = Math.max(0.3, Math.min(2.5, d2TargetIntensity));
+
+    drawD2DebugHand(userRight, "rgba(255,230,50,0.9)", [
+      `INTENSITY: ${d2TargetIntensity.toFixed(2)}`,
+    ]);
   }
 }
