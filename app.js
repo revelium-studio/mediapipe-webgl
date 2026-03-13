@@ -1218,7 +1218,7 @@ function _initDemo2Core(cvs, w, h) {
   });
 }
 
-const D3_IMG_PATH = "images/assets/EL-5.png";
+const D3_IMG_PATH = "images/demo-2/el-2.svg";
 
 function initDemo3() {
   if (demo3Ready) return;
