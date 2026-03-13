@@ -1178,6 +1178,7 @@ function _initDemo2Core(cvs, w, h) {
   d2Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
   const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin("anonymous");
   const geo = new THREE.PlaneGeometry(D2_IMG_W, D2_IMG_H);
 
   for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
@@ -1252,6 +1253,7 @@ function _initDemo3Core(cvs, w, h) {
   d3Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
   const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin("anonymous");
   const geo = new THREE.PlaneGeometry(D2_IMG_W, D2_IMG_H);
 
   for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
@@ -1269,14 +1271,22 @@ function _initDemo3Core(cvs, w, h) {
     d3Meshes.push(mesh);
   }
 
-  loader.load(D3_IMG_PATH, (tex) => {
+  function applyTex(tex) {
     tex.colorSpace = THREE.SRGBColorSpace;
     for (let j = 0; j < d3Meshes.length; j++) {
       d3Meshes[j].material.map = tex;
       d3Meshes[j].material.color.set(0xffffff);
       d3Meshes[j].material.needsUpdate = true;
     }
-  });
+  }
+
+  fetch(D3_IMG_PATH)
+    .then((r) => r.text())
+    .then((svgText) => {
+      const dataUrl = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgText)));
+      loader.load(dataUrl, applyTex, undefined, () => loader.load("images/assets/EL-2.png", applyTex));
+    })
+    .catch(() => loader.load("images/assets/EL-2.png", applyTex));
 
   window.addEventListener("resize", () => {
     if (!d3Camera) return;
