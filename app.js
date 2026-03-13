@@ -1103,14 +1103,14 @@ async function startVoiceCapture(worker) {
 // ██  DEMO 2 — Interactive Spiral Images                                     ██
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const D2_UNIQUE_IMGS     = 12;
-const D2_TOTAL_SLOTS     = 50;
-const D2_SPIRAL_TURNS    = 6;
-const D2_SPIRAL_HEIGHT   = 32;
-const D2_IMG_W           = 1.4;
-const D2_IMG_H           = 1.75;
+const D2_UNIQUE_IMGS     = 15;
+const D2_TOTAL_SLOTS     = 160;
+const D2_SPIRAL_TURNS    = 7;
+const D2_SPIRAL_HEIGHT   = 34;
+const D2_IMG_W           = 1.6;
+const D2_IMG_H           = 2.0;
 const D2_LERP            = 0.07;
-const D2_BASE_SPEED      = 0.004;
+const D2_BASE_SPEED      = 0.0004;
 const D2_ZOOM_MIN        = 6;
 const D2_ZOOM_MAX        = 40;
 
@@ -1146,8 +1146,21 @@ function initDemo2() {
   const loader = new THREE.TextureLoader();
   const geo = new THREE.PlaneGeometry(D2_IMG_W, D2_IMG_H);
 
+  for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xe0e0e0,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.93,
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    d2Scene.add(mesh);
+    d2Meshes.push(mesh);
+  }
+
   for (let i = 0; i < D2_UNIQUE_IMGS; i++) {
-    const url = `https://picsum.photos/seed/sp${i}/200/250.webp`;
+    const url = `https://picsum.photos/seed/sp${i}/160/200.webp`;
     loader.load(url, (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       d2Textures[i] = tex;
@@ -1159,19 +1172,6 @@ function initDemo2() {
         }
       }
     });
-  }
-
-  for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xe0e0e0,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.95,
-    });
-
-    const mesh = new THREE.Mesh(geo, mat);
-    d2Scene.add(mesh);
-    d2Meshes.push(mesh);
   }
 
   window.addEventListener("resize", () => {
@@ -1267,9 +1267,10 @@ function handleDemo2Hands(landmarks, handedness) {
     const thumb = userRight[4], idx = userRight[8];
     const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
 
-    d2TargetRadius = 1.5 + spread * 50;
-    d2TargetRadius = Math.max(1.5, Math.min(12, d2TargetRadius));
+    d2TargetRadius = 2 + spread * 55;
+    d2TargetRadius = Math.max(2, Math.min(14, d2TargetRadius));
 
-    drawD2ThumbLine(userRight, `SPIRAL ${Math.round(d2TargetRadius * 10)}`);
+    const pct = ((d2TargetRadius - 2) / 12) * 100;
+    drawD2ThumbLine(userRight, `HELIX ${Math.round(pct)}%`);
   }
 }
