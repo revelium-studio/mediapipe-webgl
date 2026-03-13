@@ -1162,7 +1162,7 @@ function initDemo2() {
 
 function _initDemo2Core(cvs, w, h) {
   d2Scene = new THREE.Scene();
-  d2Scene.background = new THREE.Color(0xffffff);
+  d2Scene.background = new THREE.Color(0x0a0a0a);
 
   d2Camera = new THREE.PerspectiveCamera(d2Anim.fov, w / h, 0.1, 200);
   d2Camera.position.set(10, 5, 22);
@@ -1236,7 +1236,7 @@ function initDemo3() {
 
 function _initDemo3Core(cvs, w, h) {
   d3Scene = new THREE.Scene();
-  d3Scene.background = new THREE.Color(0xffffff);
+  d3Scene.background = new THREE.Color(0x0a0a0a);
 
   d3Camera = new THREE.PerspectiveCamera(d3Anim.fov, w / h, 0.1, 200);
   d3Camera.position.set(10, 5, 22);
