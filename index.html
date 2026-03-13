@@ -9,10 +9,17 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
   <script type="module" src="https://unpkg.com/@splinetool/viewer@1.12.67/build/spline-viewer.js"></script>
 </head>
 <body>
+
+  <!-- Demo switcher -->
+  <nav id="demo-switcher" class="demo-switcher">
+    <button class="demo-switcher__btn active" data-demo="1">Demo 1</button>
+    <button class="demo-switcher__btn" data-demo="2">Demo 2</button>
+  </nav>
 
   <div id="camera-overlay" class="camera-overlay">
     <div class="camera-overlay__content">
@@ -103,6 +110,24 @@
             fill="none" stroke-linecap="round" opacity="0.8"/>
     </svg>
   </div>
+
+  <!-- Demo 2: Image sphere -->
+  <canvas id="sphere-canvas" class="sphere-canvas"></canvas>
+  <aside id="demo2-sidebar" class="demo2-sidebar">
+    <h3>Sphere</h3>
+    <div class="sidebar-row">
+      <span class="sidebar-label">Distance</span>
+      <span id="sphere-dist" class="sidebar-value">0.00</span>
+    </div>
+    <div class="sidebar-row">
+      <span class="sidebar-label">Theta</span>
+      <span id="sphere-theta" class="sidebar-value">0.00</span>
+    </div>
+    <div class="sidebar-row">
+      <span class="sidebar-label">Phi</span>
+      <span id="sphere-phi" class="sidebar-value">0.00</span>
+    </div>
+  </aside>
 
   <video id="webcam" autoplay playsinline style="display:none"></video>
 

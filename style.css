@@ -338,6 +338,115 @@ html, body {
   z-index: 1;
 }
 
+/* ── Demo switcher ─────────────────────────────────────── */
+.demo-switcher {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.demo-switcher__btn {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  border: none;
+  padding: 7px 20px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.25s, color 0.25s;
+}
+
+.demo-switcher__btn.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+/* ── Demo visibility toggles ─────────────────────────── */
+body.demo2-active #webgl-canvas,
+body.demo2-active .controls,
+body.demo2-active .hamburger,
+body.demo2-active .panel,
+body.demo2-active .heading,
+body.demo2-active .floating-el,
+body.demo2-active .hand-cursor,
+body.demo2-active .img-transition {
+  display: none !important;
+}
+
+body:not(.demo2-active) .sphere-canvas,
+body:not(.demo2-active) .demo2-sidebar {
+  display: none !important;
+}
+
+/* ── Sphere canvas (Demo 2) ──────────────────────────── */
+.sphere-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 1;
+}
+
+/* ── Demo 2 sidebar ──────────────────────────────────── */
+.demo2-sidebar {
+  position: fixed;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 20px 24px;
+  min-width: 160px;
+}
+
+.demo2-sidebar h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  opacity: 0.5;
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+
+.sidebar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.sidebar-row:last-child {
+  margin-bottom: 0;
+}
+
+.sidebar-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.5;
+}
+
+.sidebar-value {
+  font-size: 13px;
+  font-family: "SF Mono", "Menlo", monospace;
+  opacity: 0.8;
+}
+
 /* ── Debug webcam preview (bottom-right) ──────────────── */
 .debug-canvas {
   position: fixed;

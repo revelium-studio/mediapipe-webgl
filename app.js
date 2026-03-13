@@ -1,3 +1,22 @@
+// ─── Demo Switcher ──────────────────────────────────────────────────────────
+let activeDemo = 1;
+const demoSwitcherBtns = document.querySelectorAll(".demo-switcher__btn");
+
+function switchToDemo(num) {
+  if (num === activeDemo) return;
+  activeDemo = num;
+  document.body.classList.toggle("demo2-active", num === 2);
+  demoSwitcherBtns.forEach(b => b.classList.toggle("active", +b.dataset.demo === num));
+  if (num === 2) {
+    initDemo2();
+    renderDemo2Loop();
+  }
+}
+
+demoSwitcherBtns.forEach(btn => {
+  btn.addEventListener("click", () => switchToDemo(+btn.dataset.demo));
+});
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 const COORD_SCALE_X       = 2.0;
 const COORD_SCALE_Y       = 3.0;
@@ -858,8 +877,14 @@ function onHandResults(results) {
     targetCA *= 0.92;
     if (bothPinching) {
       bothPinching = false;
-      bounceElementsBack();
+      if (activeDemo === 1) bounceElementsBack();
     }
+    if (activeDemo === 2) handleDemo2Hands(null, null);
+    return;
+  }
+
+  if (activeDemo === 2) {
+    handleDemo2Hands(landmarks, handedness);
     return;
   }
 
@@ -928,10 +953,8 @@ function onHandResults(results) {
     targetCA *= 0.92;
   }
 
-  // Process bi-manual pinch gesture
   processBimanualPinch();
 
-  // Debug HUD
   debugCtx.fillStyle = "rgba(0,0,0,0.55)";
   debugCtx.fillRect(0, 0, debugCanvas.width, 18);
   debugCtx.fillStyle = "#fff";
@@ -1071,5 +1094,186 @@ async function startVoiceCapture(worker) {
     console.log('[Voice] Listening. Say "open menu" or "change background".');
   } catch (err) {
     console.error("[Voice] Mic capture failed:", err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  DEMO 2 — Image Sphere                                                  ██
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SPHERE_IMAGE_COUNT  = 36;
+const SPHERE_RADIUS       = 12;
+const SPHERE_IMAGE_SIZE   = 3.2;
+const SPHERE_ZOOM_MIN     = 0.5;
+const SPHERE_ZOOM_MAX     = SPHERE_RADIUS - 1;
+const D2_PINCH_THRESHOLD  = 0.08;
+const D2_ORBIT_SPEED      = 3.0;
+const D2_ZOOM_SPEED       = 8.0;
+
+const sphereDistEl  = document.getElementById("sphere-dist");
+const sphereThetaEl = document.getElementById("sphere-theta");
+const spherePhiEl   = document.getElementById("sphere-phi");
+
+let demo2Ready = false;
+let sphereScene, sphereCamera, sphereRenderer;
+let sphereTheta = 0, spherePhi = 0, sphereDist = 6;
+let d2PrevHandX = null, d2PrevHandY = null;
+let d2PrevSpread = null;
+let d2Pinching = false;
+let d2AnimId = null;
+
+function fibonacciSphere(n) {
+  const pts = [];
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const theta = goldenAngle * i;
+    pts.push({ x: Math.cos(theta) * r, y, z: Math.sin(theta) * r });
+  }
+  return pts;
+}
+
+function initDemo2() {
+  if (demo2Ready) return;
+  demo2Ready = true;
+
+  const cvs = document.getElementById("sphere-canvas");
+  sphereScene    = new THREE.Scene();
+  sphereScene.background = new THREE.Color(0x080810);
+
+  sphereCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+  sphereRenderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true });
+  sphereRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  sphereRenderer.setSize(window.innerWidth, window.innerHeight);
+
+  sphereScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+  const loader = new THREE.TextureLoader();
+  const positions = fibonacciSphere(SPHERE_IMAGE_COUNT);
+  const geo = new THREE.PlaneGeometry(SPHERE_IMAGE_SIZE, SPHERE_IMAGE_SIZE);
+
+  for (let i = 0; i < SPHERE_IMAGE_COUNT; i++) {
+    const url = `https://picsum.photos/seed/sphere${i}/400/400.webp`;
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x333344,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.95,
+    });
+
+    loader.load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      mat.map = tex;
+      mat.color.set(0xffffff);
+      mat.needsUpdate = true;
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    const p = positions[i];
+    mesh.position.set(p.x * SPHERE_RADIUS, p.y * SPHERE_RADIUS, p.z * SPHERE_RADIUS);
+    mesh.lookAt(0, 0, 0);
+    sphereScene.add(mesh);
+  }
+
+  window.addEventListener("resize", () => {
+    if (!sphereCamera) return;
+    sphereCamera.aspect = window.innerWidth / window.innerHeight;
+    sphereCamera.updateProjectionMatrix();
+    sphereRenderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  updateSphereCamera();
+}
+
+function updateSphereCamera() {
+  if (!sphereCamera) return;
+  sphereCamera.position.set(
+    sphereDist * Math.sin(spherePhi) * Math.sin(sphereTheta),
+    sphereDist * Math.cos(spherePhi),
+    sphereDist * Math.sin(spherePhi) * Math.cos(sphereTheta),
+  );
+  sphereCamera.lookAt(0, 0, 0);
+
+  sphereDistEl.textContent  = sphereDist.toFixed(2);
+  sphereThetaEl.textContent = ((sphereTheta * 180 / Math.PI) % 360).toFixed(1) + "°";
+  spherePhiEl.textContent   = ((spherePhi * 180 / Math.PI) % 360).toFixed(1) + "°";
+}
+
+function renderDemo2Loop() {
+  if (activeDemo !== 2) { d2AnimId = null; return; }
+  d2AnimId = requestAnimationFrame(renderDemo2Loop);
+  if (!sphereScene) return;
+  sphereRenderer.render(sphereScene, sphereCamera);
+}
+
+function handleDemo2Hands(landmarks, handedness) {
+  if (!landmarks || landmarks.length === 0) {
+    d2Pinching = false;
+    d2PrevHandX = null;
+    d2PrevHandY = null;
+    d2PrevSpread = null;
+    return;
+  }
+
+  let rHand = null, lHand = null;
+  for (let i = 0; i < landmarks.length; i++) {
+    const label = handedness?.[i]?.label;
+    if (label === "Left" && !rHand) rHand = landmarks[i];
+    if (label === "Right" && !lHand) lHand = landmarks[i];
+  }
+
+  const hand = rHand || lHand;
+  if (!hand) return;
+
+  const thumb = hand[4], index = hand[8];
+  const pinchDist = Math.sqrt(
+    (thumb.x - index.x) ** 2 + (thumb.y - index.y) ** 2 + ((thumb.z || 0) - (index.z || 0)) ** 2
+  );
+  const isPinching = pinchDist < D2_PINCH_THRESHOLD;
+
+  if (isPinching) {
+    const hx = 1 - hand[8].x;
+    const hy = hand[8].y;
+
+    if (d2Pinching && d2PrevHandX !== null) {
+      const dx = (hx - d2PrevHandX) * D2_ORBIT_SPEED;
+      const dy = (hy - d2PrevHandY) * D2_ORBIT_SPEED;
+      sphereTheta += dx;
+      spherePhi   = Math.max(0.1, Math.min(Math.PI - 0.1, spherePhi + dy));
+      updateSphereCamera();
+    }
+
+    d2PrevHandX = hx;
+    d2PrevHandY = hy;
+    d2Pinching = true;
+  } else {
+    d2Pinching = false;
+    d2PrevHandX = null;
+    d2PrevHandY = null;
+  }
+
+  if (rHand && lHand) {
+    const rThumb = rHand[4], rIdx = rHand[8];
+    const lThumb = lHand[4], lIdx = lHand[8];
+    const rPinch = Math.sqrt((rThumb.x - rIdx.x) ** 2 + (rThumb.y - rIdx.y) ** 2);
+    const lPinch = Math.sqrt((lThumb.x - lIdx.x) ** 2 + (lThumb.y - lIdx.y) ** 2);
+
+    if (rPinch < D2_PINCH_THRESHOLD && lPinch < D2_PINCH_THRESHOLD) {
+      const spread = Math.sqrt(
+        ((1 - rHand[8].x) - (1 - lHand[8].x)) ** 2 + (rHand[8].y - lHand[8].y) ** 2
+      );
+
+      if (d2PrevSpread !== null) {
+        const delta = (spread - d2PrevSpread) * D2_ZOOM_SPEED;
+        sphereDist = Math.max(SPHERE_ZOOM_MIN, Math.min(SPHERE_ZOOM_MAX, sphereDist - delta));
+        updateSphereCamera();
+      }
+      d2PrevSpread = spread;
+    } else {
+      d2PrevSpread = null;
+    }
+  } else {
+    d2PrevSpread = null;
   }
 }
