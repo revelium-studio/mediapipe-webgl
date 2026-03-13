@@ -1103,16 +1103,24 @@ async function startVoiceCapture(worker) {
 // ██  DEMO 2 — Interactive Spiral Images                                     ██
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const D2_UNIQUE_IMGS     = 15;
+const D2_IMG_PATHS = [
+  "images/demo-2/Frame 2.jpg", "images/demo-2/Frame 3.jpg",
+  "images/demo-2/Frame 4.jpg", "images/demo-2/Frame 5.jpg",
+  "images/demo-2/Frame 6.jpg", "images/demo-2/Frame 7.jpg",
+  "images/demo-2/Frame 8.jpg", "images/demo-2/Frame 9.jpg",
+];
 const D2_TOTAL_SLOTS     = 160;
 const D2_SPIRAL_TURNS    = 7;
 const D2_SPIRAL_HEIGHT   = 34;
 const D2_IMG_W           = 1.6;
 const D2_IMG_H           = 2.0;
-const D2_LERP            = 0.07;
 const D2_BASE_SPEED      = 0.0004;
-const D2_ZOOM_MIN        = 6;
-const D2_ZOOM_MAX        = 40;
+const D2_FOV_MIN         = 12;
+const D2_FOV_MAX         = 55;
+const D2_FOV_DEFAULT     = 45;
+const D2_RADIUS_MIN      = 2;
+const D2_RADIUS_MAX      = 14;
+const D2_RADIUS_DEFAULT  = 5;
 
 const zoomFillEl = document.getElementById("zoom-fill");
 
@@ -1120,10 +1128,8 @@ let demo2Ready = false;
 let d2Scene, d2Camera, d2Renderer;
 let d2Meshes = [];
 let d2Phase = 0;
-let d2Textures = [];
 
-let d2Zoom      = 18,  d2TargetZoom     = 18;
-let d2Radius    = 5,   d2TargetRadius   = 5;
+const d2Anim = { fov: D2_FOV_DEFAULT, radius: D2_RADIUS_DEFAULT };
 
 function initDemo2() {
   if (demo2Ready) return;
@@ -1133,13 +1139,14 @@ function initDemo2() {
   d2Scene = new THREE.Scene();
   d2Scene.background = new THREE.Color(0xffffff);
 
-  d2Camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
-  d2Camera.position.set(8, 4, d2Zoom);
+  d2Camera = new THREE.PerspectiveCamera(d2Fov, window.innerWidth / window.innerHeight, 0.1, 200);
+  d2Camera.position.set(10, 5, 22);
   d2Camera.lookAt(0, -2, 0);
 
-  d2Renderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true });
+  d2Renderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true, alpha: false });
   d2Renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   d2Renderer.setSize(window.innerWidth, window.innerHeight);
+  d2Renderer.sortObjects = false;
 
   d2Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
@@ -1148,23 +1155,23 @@ function initDemo2() {
 
   for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
     const mat = new THREE.MeshBasicMaterial({
-      color: 0xe0e0e0,
-      side: THREE.DoubleSide,
+      color: 0xe8e8e8,
+      side: THREE.FrontSide,
       transparent: true,
-      opacity: 0.93,
+      opacity: 0.94,
+      depthWrite: false,
     });
 
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = i;
     d2Scene.add(mesh);
     d2Meshes.push(mesh);
   }
 
-  for (let i = 0; i < D2_UNIQUE_IMGS; i++) {
-    const url = `https://picsum.photos/seed/sp${i}/160/200.webp`;
+  D2_IMG_PATHS.forEach((url, i) => {
     loader.load(url, (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
-      d2Textures[i] = tex;
-      for (let j = i; j < D2_TOTAL_SLOTS; j += D2_UNIQUE_IMGS) {
+      for (let j = i; j < D2_TOTAL_SLOTS; j += D2_IMG_PATHS.length) {
         if (d2Meshes[j]) {
           d2Meshes[j].material.map = tex;
           d2Meshes[j].material.color.set(0xffffff);
@@ -1172,7 +1179,7 @@ function initDemo2() {
         }
       }
     });
-  }
+  });
 
   window.addEventListener("resize", () => {
     if (!d2Camera) return;
@@ -1186,26 +1193,24 @@ function renderDemo2Loop() {
   if (activeDemo !== 2 || !d2Scene) return;
   requestAnimationFrame(renderDemo2Loop);
 
-  d2Zoom   += (d2TargetZoom   - d2Zoom)   * D2_LERP;
-  d2Radius += (d2TargetRadius - d2Radius) * D2_LERP;
-
   d2Phase += D2_BASE_SPEED;
 
+  d2Camera.fov = d2Anim.fov;
+  d2Camera.updateProjectionMatrix();
+
+  const r = d2Anim.radius;
   for (let i = 0; i < d2Meshes.length; i++) {
     const t = ((i / D2_TOTAL_SLOTS) + d2Phase) % 1.0;
     const angle = t * D2_SPIRAL_TURNS * Math.PI * 2;
     const y = (t - 0.5) * D2_SPIRAL_HEIGHT;
-    const x = d2Radius * Math.cos(angle);
-    const z = d2Radius * Math.sin(angle);
+    const x = r * Math.cos(angle);
+    const z = r * Math.sin(angle);
 
     d2Meshes[i].position.set(x, y, z);
     d2Meshes[i].lookAt(d2Camera.position);
   }
 
-  d2Camera.position.set(8, 4, d2Zoom);
-  d2Camera.lookAt(0, -2, 0);
-
-  const zoomPct = 1 - (d2Zoom - D2_ZOOM_MIN) / (D2_ZOOM_MAX - D2_ZOOM_MIN);
+  const zoomPct = 1 - (d2Anim.fov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
   zoomFillEl.style.height = `${Math.max(0, Math.min(100, zoomPct * 100))}%`;
 
   d2Renderer.render(d2Scene, d2Camera);
@@ -1220,24 +1225,23 @@ function drawD2ThumbLine(lm, label) {
   const tx = thumb.x * debugCanvas.width,  ty = thumb.y * debugCanvas.height;
   const ix = idx.x   * debugCanvas.width,  iy = idx.y   * debugCanvas.height;
 
-  debugCtx.strokeStyle = "rgba(255,255,255,0.6)";
-  debugCtx.lineWidth = 1.5;
-  debugCtx.setLineDash([4, 4]);
+  debugCtx.strokeStyle = "rgba(255,255,255,0.5)";
+  debugCtx.lineWidth = 1;
+  debugCtx.setLineDash([3, 3]);
   debugCtx.beginPath();
   debugCtx.moveTo(tx, ty);
   debugCtx.lineTo(ix, iy);
   debugCtx.stroke();
   debugCtx.setLineDash([]);
 
-  const dotR = 3;
-  debugCtx.fillStyle = "rgba(255,255,255,0.8)";
-  debugCtx.beginPath(); debugCtx.arc(tx, ty, dotR, 0, Math.PI * 2); debugCtx.fill();
-  debugCtx.beginPath(); debugCtx.arc(ix, iy, dotR, 0, Math.PI * 2); debugCtx.fill();
-
-  const mx = (tx + ix) / 2, my = (ty + iy) / 2 - 8;
-  debugCtx.font = "bold 8px sans-serif";
   debugCtx.fillStyle = "rgba(255,255,255,0.7)";
-  debugCtx.fillText(label, mx - 16, my);
+  debugCtx.beginPath(); debugCtx.arc(tx, ty, 2.5, 0, Math.PI * 2); debugCtx.fill();
+  debugCtx.beginPath(); debugCtx.arc(ix, iy, 2.5, 0, Math.PI * 2); debugCtx.fill();
+
+  const mx = (tx + ix) / 2, my = (ty + iy) / 2 - 7;
+  debugCtx.font = "bold 7px sans-serif";
+  debugCtx.fillStyle = "rgba(255,255,255,0.6)";
+  debugCtx.fillText(label, mx - 14, my);
 
   debugCtx.restore();
 }
@@ -1256,10 +1260,10 @@ function handleDemo2Hands(landmarks, handedness) {
     const thumb = userLeft[4], idx = userLeft[8];
     const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
 
-    d2TargetZoom = D2_ZOOM_MAX - spread * 180;
-    d2TargetZoom = Math.max(D2_ZOOM_MIN, Math.min(D2_ZOOM_MAX, d2TargetZoom));
+    const targetFov = Math.max(D2_FOV_MIN, Math.min(D2_FOV_MAX, D2_FOV_MAX - spread * 230));
+    gsap.to(d2Anim, { fov: targetFov, duration: 0.5, ease: "power3.out", overwrite: "auto" });
 
-    const zoomPct = 1 - (d2TargetZoom - D2_ZOOM_MIN) / (D2_ZOOM_MAX - D2_ZOOM_MIN);
+    const zoomPct = 1 - (targetFov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
     drawD2ThumbLine(userLeft, `ZOOM ${Math.round(zoomPct * 100)}%`);
   }
 
@@ -1267,10 +1271,10 @@ function handleDemo2Hands(landmarks, handedness) {
     const thumb = userRight[4], idx = userRight[8];
     const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
 
-    d2TargetRadius = 2 + spread * 55;
-    d2TargetRadius = Math.max(2, Math.min(14, d2TargetRadius));
+    const targetR = Math.max(D2_RADIUS_MIN, Math.min(D2_RADIUS_MAX, D2_RADIUS_MIN + spread * 55));
+    gsap.to(d2Anim, { radius: targetR, duration: 0.5, ease: "power3.out", overwrite: "auto" });
 
-    const pct = ((d2TargetRadius - 2) / 12) * 100;
+    const pct = ((targetR - D2_RADIUS_MIN) / (D2_RADIUS_MAX - D2_RADIUS_MIN)) * 100;
     drawD2ThumbLine(userRight, `HELIX ${Math.round(pct)}%`);
   }
 }
