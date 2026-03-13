@@ -6,10 +6,14 @@ function switchToDemo(num) {
   if (num === activeDemo) return;
   activeDemo = num;
   document.body.classList.toggle("demo2-active", num === 2);
+  document.body.classList.toggle("demo3-active", num === 3);
   demoSwitcherBtns.forEach(b => b.classList.toggle("active", +b.dataset.demo === num));
   if (num === 2) {
     initDemo2();
-    renderDemo2Loop();
+    renderSpiralLoop();
+  } else if (num === 3) {
+    initDemo3();
+    renderSpiralLoop();
   } else {
     render();
   }
@@ -882,11 +886,16 @@ function onHandResults(results) {
       if (activeDemo === 1) bounceElementsBack();
     }
     if (activeDemo === 2) handleDemo2Hands(null, null);
+    if (activeDemo === 3) handleDemo3Hands(null, null);
     return;
   }
 
   if (activeDemo === 2) {
     handleDemo2Hands(landmarks, handedness);
+    return;
+  }
+  if (activeDemo === 3) {
+    handleDemo3Hands(landmarks, handedness);
     return;
   }
 
@@ -1125,11 +1134,17 @@ const D2_RADIUS_DEFAULT  = 5;
 const zoomFillEl = document.getElementById("zoom-fill");
 
 let demo2Ready = false;
-let d2Scene, d2Camera, d2Renderer;
-let d2Meshes = [];
+let d2Scene, d2Camera, d2Meshes = [];
 let d2Phase = 0;
 
+let demo3Ready = false;
+let d3Scene, d3Camera, d3Meshes = [];
+let d3Phase = 0;
+
+let spiralRenderer = null;
+
 const d2Anim = { fov: D2_FOV_DEFAULT, radius: D2_RADIUS_DEFAULT };
+const d3Anim = { fov: D2_FOV_DEFAULT, radius: D2_RADIUS_DEFAULT };
 
 function initDemo2() {
   if (demo2Ready) return;
@@ -1153,10 +1168,12 @@ function _initDemo2Core(cvs, w, h) {
   d2Camera.position.set(10, 5, 22);
   d2Camera.lookAt(0, -2, 0);
 
-  d2Renderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true, alpha: false });
-  d2Renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  d2Renderer.setSize(w, h);
-  d2Renderer.sortObjects = false;
+  if (!spiralRenderer) {
+    spiralRenderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true, alpha: false });
+    spiralRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    spiralRenderer.sortObjects = false;
+  }
+  spiralRenderer.setSize(w, h);
 
   d2Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
@@ -1197,35 +1214,117 @@ function _initDemo2Core(cvs, w, h) {
     const rh = Math.max(1, window.innerHeight);
     d2Camera.aspect = rw / rh;
     d2Camera.updateProjectionMatrix();
-    d2Renderer.setSize(rw, rh);
+    if (spiralRenderer) spiralRenderer.setSize(rw, rh);
   });
 }
 
-function renderDemo2Loop() {
-  requestAnimationFrame(renderDemo2Loop);
-  if (activeDemo !== 2 || !d2Scene) return;
+const D3_IMG_PATH = "images/assets/EL-5.png";
 
-  d2Phase += D2_BASE_SPEED;
+function initDemo3() {
+  if (demo3Ready) return;
+  demo3Ready = true;
 
-  d2Camera.fov = d2Anim.fov;
-  d2Camera.updateProjectionMatrix();
+  const cvs = document.getElementById("sphere-canvas");
+  requestAnimationFrame(() => {
+    const w = Math.max(1, cvs.clientWidth || window.innerWidth);
+    const h = Math.max(1, cvs.clientHeight || window.innerHeight);
+    cvs.width = w;
+    cvs.height = h;
+    _initDemo3Core(cvs, w, h);
+  });
+}
 
-  const r = d2Anim.radius;
-  for (let i = 0; i < d2Meshes.length; i++) {
-    const t = ((i / D2_TOTAL_SLOTS) + d2Phase) % 1.0;
-    const angle = t * D2_SPIRAL_TURNS * Math.PI * 2;
-    const y = (t - 0.5) * D2_SPIRAL_HEIGHT;
-    const x = r * Math.cos(angle);
-    const z = r * Math.sin(angle);
+function _initDemo3Core(cvs, w, h) {
+  d3Scene = new THREE.Scene();
+  d3Scene.background = new THREE.Color(0xffffff);
 
-    d2Meshes[i].position.set(x, y, z);
-    d2Meshes[i].lookAt(d2Camera.position);
+  d3Camera = new THREE.PerspectiveCamera(d3Anim.fov, w / h, 0.1, 200);
+  d3Camera.position.set(10, 5, 22);
+  d3Camera.lookAt(0, -2, 0);
+
+  if (!spiralRenderer) {
+    spiralRenderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true, alpha: false });
+    spiralRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    spiralRenderer.sortObjects = false;
+  }
+  spiralRenderer.setSize(w, h);
+
+  d3Scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+  const loader = new THREE.TextureLoader();
+  const geo = new THREE.PlaneGeometry(D2_IMG_W, D2_IMG_H);
+
+  for (let i = 0; i < D2_TOTAL_SLOTS; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xe8e8e8,
+      side: THREE.FrontSide,
+      transparent: true,
+      opacity: 0.94,
+      depthWrite: false,
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = i;
+    d3Scene.add(mesh);
+    d3Meshes.push(mesh);
   }
 
-  const zoomPct = 1 - (d2Anim.fov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
-  zoomFillEl.style.height = `${Math.max(0, Math.min(100, zoomPct * 100))}%`;
+  loader.load(D3_IMG_PATH, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    for (let j = 0; j < d3Meshes.length; j++) {
+      d3Meshes[j].material.map = tex;
+      d3Meshes[j].material.color.set(0xffffff);
+      d3Meshes[j].material.needsUpdate = true;
+    }
+  });
 
-  d2Renderer.render(d2Scene, d2Camera);
+  window.addEventListener("resize", () => {
+    if (!d3Camera) return;
+    const rw = Math.max(1, window.innerWidth);
+    const rh = Math.max(1, window.innerHeight);
+    d3Camera.aspect = rw / rh;
+    d3Camera.updateProjectionMatrix();
+    if (spiralRenderer) spiralRenderer.setSize(rw, rh);
+  });
+}
+
+function renderSpiralLoop() {
+  requestAnimationFrame(renderSpiralLoop);
+  if (activeDemo === 2 && d2Scene) {
+    d2Phase += D2_BASE_SPEED;
+    d2Camera.fov = d2Anim.fov;
+    d2Camera.updateProjectionMatrix();
+    const r = d2Anim.radius;
+    for (let i = 0; i < d2Meshes.length; i++) {
+      const t = ((i / D2_TOTAL_SLOTS) + d2Phase) % 1.0;
+      const angle = t * D2_SPIRAL_TURNS * Math.PI * 2;
+      const y = (t - 0.5) * D2_SPIRAL_HEIGHT;
+      const x = r * Math.cos(angle);
+      const z = r * Math.sin(angle);
+      d2Meshes[i].position.set(x, y, z);
+      d2Meshes[i].lookAt(d2Camera.position);
+    }
+    const zoomPct = 1 - (d2Anim.fov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
+    zoomFillEl.style.height = `${Math.max(0, Math.min(100, zoomPct * 100))}%`;
+    spiralRenderer.render(d2Scene, d2Camera);
+  } else if (activeDemo === 3 && d3Scene) {
+    d3Phase += D2_BASE_SPEED;
+    d3Camera.fov = d3Anim.fov;
+    d3Camera.updateProjectionMatrix();
+    const r = d3Anim.radius;
+    for (let i = 0; i < d3Meshes.length; i++) {
+      const t = ((i / D2_TOTAL_SLOTS) + d3Phase) % 1.0;
+      const angle = t * D2_SPIRAL_TURNS * Math.PI * 2;
+      const y = (t - 0.5) * D2_SPIRAL_HEIGHT;
+      const x = r * Math.cos(angle);
+      const z = r * Math.sin(angle);
+      d3Meshes[i].position.set(x, y, z);
+      d3Meshes[i].lookAt(d3Camera.position);
+    }
+    const zoomPct = 1 - (d3Anim.fov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
+    zoomFillEl.style.height = `${Math.max(0, Math.min(100, zoomPct * 100))}%`;
+    spiralRenderer.render(d3Scene, d3Camera);
+  }
 }
 
 function drawD2ThumbLine(lm, label) {
@@ -1286,6 +1385,35 @@ function handleDemo2Hands(landmarks, handedness) {
     const targetR = Math.max(D2_RADIUS_MIN, Math.min(D2_RADIUS_MAX, D2_RADIUS_MIN + spread * 55));
     gsap.to(d2Anim, { radius: targetR, duration: 0.5, ease: "power3.out", overwrite: "auto" });
 
+    const pct = ((targetR - D2_RADIUS_MIN) / (D2_RADIUS_MAX - D2_RADIUS_MIN)) * 100;
+    drawD2ThumbLine(userRight, `HELIX ${Math.round(pct)}%`);
+  }
+}
+
+function handleDemo3Hands(landmarks, handedness) {
+  if (!landmarks || landmarks.length === 0) return;
+
+  let userLeft = null, userRight = null;
+  for (let i = 0; i < landmarks.length; i++) {
+    const mpLabel = handedness?.[i]?.label;
+    if (mpLabel === "Right" && !userLeft)  userLeft  = landmarks[i];
+    if (mpLabel === "Left"  && !userRight) userRight = landmarks[i];
+  }
+
+  if (userLeft) {
+    const thumb = userLeft[4], idx = userLeft[8];
+    const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
+    const targetFov = Math.max(D2_FOV_MIN, Math.min(D2_FOV_MAX, D2_FOV_MAX - spread * 230));
+    gsap.to(d3Anim, { fov: targetFov, duration: 0.5, ease: "power3.out", overwrite: "auto" });
+    const zoomPct = 1 - (targetFov - D2_FOV_MIN) / (D2_FOV_MAX - D2_FOV_MIN);
+    drawD2ThumbLine(userLeft, `ZOOM ${Math.round(zoomPct * 100)}%`);
+  }
+
+  if (userRight) {
+    const thumb = userRight[4], idx = userRight[8];
+    const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
+    const targetR = Math.max(D2_RADIUS_MIN, Math.min(D2_RADIUS_MAX, D2_RADIUS_MIN + spread * 55));
+    gsap.to(d3Anim, { radius: targetR, duration: 0.5, ease: "power3.out", overwrite: "auto" });
     const pct = ((targetR - D2_RADIUS_MIN) / (D2_RADIUS_MAX - D2_RADIUS_MIN)) * 100;
     drawD2ThumbLine(userRight, `HELIX ${Math.round(pct)}%`);
   }

@@ -380,12 +380,21 @@ body.demo2-active .heading,
 body.demo2-active .floating-el,
 body.demo2-active .hand-cursor,
 body.demo2-active .img-transition,
-body.demo2-active .ai-assistant {
+body.demo2-active .ai-assistant,
+body.demo3-active #webgl-canvas,
+body.demo3-active .controls,
+body.demo3-active .hamburger,
+body.demo3-active .panel,
+body.demo3-active .heading,
+body.demo3-active .floating-el,
+body.demo3-active .hand-cursor,
+body.demo3-active .img-transition,
+body.demo3-active .ai-assistant {
   display: none !important;
 }
 
-body:not(.demo2-active) .sphere-canvas,
-body:not(.demo2-active) .demo2-sidebar {
+body:not(.demo2-active):not(.demo3-active) .sphere-canvas,
+body:not(.demo2-active):not(.demo3-active) .demo2-sidebar {
   display: none !important;
 }
 
