@@ -398,53 +398,46 @@ body:not(.demo2-active) .demo2-sidebar {
   z-index: 1;
 }
 
-/* ── Demo 2 sidebar ──────────────────────────────────── */
+/* ── Demo 2 sidebar (zoom bar) ────────────────────────── */
 .demo2-sidebar {
   position: fixed;
   top: 50%;
-  right: 20px;
+  right: 28px;
   transform: translateY(-50%);
   z-index: 100;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 20px 24px;
-  min-width: 160px;
-}
-
-.demo2-sidebar h3 {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  opacity: 0.5;
-  margin-bottom: 16px;
-  font-weight: 500;
-}
-
-.sidebar-row {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
-  margin-bottom: 10px;
+  gap: 10px;
 }
 
-.sidebar-row:last-child {
-  margin-bottom: 0;
+.zoom-track {
+  width: 6px;
+  height: 200px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.sidebar-label {
-  font-size: 11px;
+.zoom-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to top, rgba(255,255,255,0.7), rgba(255,255,255,0.3));
+  border-radius: 3px;
+  will-change: height;
+}
+
+.zoom-label {
+  font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.5;
-}
-
-.sidebar-value {
-  font-size: 13px;
-  font-family: "SF Mono", "Menlo", monospace;
-  opacity: 0.8;
+  letter-spacing: 0.12em;
+  opacity: 0.35;
+  font-weight: 500;
 }
 
 /* ── Debug webcam preview (bottom-right) ──────────────── */

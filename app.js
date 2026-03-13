@@ -10,6 +10,8 @@ function switchToDemo(num) {
   if (num === 2) {
     initDemo2();
     renderDemo2Loop();
+  } else {
+    render();
   }
 }
 
@@ -397,7 +399,7 @@ function render() {
   gl.uniform1f(uBulgeFalloff, bulgeFalloff);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  requestAnimationFrame(render);
+  if (activeDemo === 1) requestAnimationFrame(render);
 }
 render();
 
@@ -1101,35 +1103,50 @@ async function startVoiceCapture(worker) {
 // ██  DEMO 2 — Image Sphere                                                  ██
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const SPHERE_IMAGE_COUNT  = 36;
-const SPHERE_RADIUS       = 12;
-const SPHERE_IMAGE_SIZE   = 3.2;
-const SPHERE_ZOOM_MIN     = 0.5;
-const SPHERE_ZOOM_MAX     = SPHERE_RADIUS - 1;
-const D2_PINCH_THRESHOLD  = 0.08;
-const D2_ORBIT_SPEED      = 3.0;
-const D2_ZOOM_SPEED       = 8.0;
+const D2_IMAGE_COUNT     = 120;
+const D2_SPHERE_R_MIN    = 8;
+const D2_SPHERE_R_MAX    = 20;
+const D2_IMG_SIZE_MIN    = 1.2;
+const D2_IMG_SIZE_MAX    = 3.8;
+const D2_ZOOM_MIN        = 0.3;
+const D2_ZOOM_MAX        = 18;
+const D2_PINCH_THRESH    = 0.08;
+const D2_ORBIT_SPEED     = 4.0;
+const D2_LERP            = 0.10;
 
-const sphereDistEl  = document.getElementById("sphere-dist");
-const sphereThetaEl = document.getElementById("sphere-theta");
-const spherePhiEl   = document.getElementById("sphere-phi");
+const zoomFillEl = document.getElementById("zoom-fill");
 
 let demo2Ready = false;
 let sphereScene, sphereCamera, sphereRenderer;
-let sphereTheta = 0, spherePhi = 0, sphereDist = 6;
-let d2PrevHandX = null, d2PrevHandY = null;
-let d2PrevSpread = null;
-let d2Pinching = false;
-let d2AnimId = null;
+
+let d2Theta = 0, d2Phi = Math.PI / 2, d2Dist = 8;
+let d2TargetTheta = 0, d2TargetPhi = Math.PI / 2, d2TargetDist = 8;
+
+let d2RotPinching = false;
+let d2PrevRotX = null, d2PrevRotY = null;
+let d2ZoomRef = null;
+
+const D2_HAND_CONNS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[0,17],[17,18],[18,19],[19,20],
+];
+
+function seededRandom(seed) {
+  let s = seed;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
 
 function fibonacciSphere(n) {
   const pts = [];
-  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const ga = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
     const y = 1 - (i / (n - 1)) * 2;
     const r = Math.sqrt(1 - y * y);
-    const theta = goldenAngle * i;
-    pts.push({ x: Math.cos(theta) * r, y, z: Math.sin(theta) * r });
+    const t = ga * i;
+    pts.push({ x: Math.cos(t) * r, y, z: Math.sin(t) * r });
   }
   return pts;
 }
@@ -1139,10 +1156,10 @@ function initDemo2() {
   demo2Ready = true;
 
   const cvs = document.getElementById("sphere-canvas");
-  sphereScene    = new THREE.Scene();
-  sphereScene.background = new THREE.Color(0x080810);
+  sphereScene = new THREE.Scene();
+  sphereScene.background = new THREE.Color(0x060610);
 
-  sphereCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+  sphereCamera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 200);
   sphereRenderer = new THREE.WebGLRenderer({ canvas: cvs, antialias: true });
   sphereRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   sphereRenderer.setSize(window.innerWidth, window.innerHeight);
@@ -1150,18 +1167,21 @@ function initDemo2() {
   sphereScene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
   const loader = new THREE.TextureLoader();
-  const positions = fibonacciSphere(SPHERE_IMAGE_COUNT);
-  const geo = new THREE.PlaneGeometry(SPHERE_IMAGE_SIZE, SPHERE_IMAGE_SIZE);
+  const positions = fibonacciSphere(D2_IMAGE_COUNT);
+  const rng = seededRandom(42);
 
-  for (let i = 0; i < SPHERE_IMAGE_COUNT; i++) {
-    const url = `https://picsum.photos/seed/sphere${i}/400/400.webp`;
+  for (let i = 0; i < D2_IMAGE_COUNT; i++) {
+    const r = D2_SPHERE_R_MIN + rng() * (D2_SPHERE_R_MAX - D2_SPHERE_R_MIN);
+    const sz = D2_IMG_SIZE_MIN + rng() * (D2_IMG_SIZE_MAX - D2_IMG_SIZE_MIN);
+    const geo = new THREE.PlaneGeometry(sz, sz);
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x333344,
+      color: 0x222233,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.92,
     });
 
+    const url = `https://picsum.photos/seed/s${i}/200/200.webp`;
     loader.load(url, (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       mat.map = tex;
@@ -1169,9 +1189,9 @@ function initDemo2() {
       mat.needsUpdate = true;
     });
 
-    const mesh = new THREE.Mesh(geo, mat);
     const p = positions[i];
-    mesh.position.set(p.x * SPHERE_RADIUS, p.y * SPHERE_RADIUS, p.z * SPHERE_RADIUS);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(p.x * r, p.y * r, p.z * r);
     mesh.lookAt(0, 0, 0);
     sphereScene.add(mesh);
   }
@@ -1182,98 +1202,119 @@ function initDemo2() {
     sphereCamera.updateProjectionMatrix();
     sphereRenderer.setSize(window.innerWidth, window.innerHeight);
   });
-
-  updateSphereCamera();
 }
 
-function updateSphereCamera() {
-  if (!sphereCamera) return;
-  sphereCamera.position.set(
-    sphereDist * Math.sin(spherePhi) * Math.sin(sphereTheta),
-    sphereDist * Math.cos(spherePhi),
-    sphereDist * Math.sin(spherePhi) * Math.cos(sphereTheta),
-  );
-  sphereCamera.lookAt(0, 0, 0);
-
-  sphereDistEl.textContent  = sphereDist.toFixed(2);
-  sphereThetaEl.textContent = ((sphereTheta * 180 / Math.PI) % 360).toFixed(1) + "°";
-  spherePhiEl.textContent   = ((spherePhi * 180 / Math.PI) % 360).toFixed(1) + "°";
+function updateZoomBar() {
+  const pct = 1 - (d2Dist - D2_ZOOM_MIN) / (D2_ZOOM_MAX - D2_ZOOM_MIN);
+  zoomFillEl.style.height = `${Math.max(0, Math.min(100, pct * 100))}%`;
 }
 
 function renderDemo2Loop() {
-  if (activeDemo !== 2) { d2AnimId = null; return; }
-  d2AnimId = requestAnimationFrame(renderDemo2Loop);
-  if (!sphereScene) return;
+  if (activeDemo !== 2 || !sphereScene) return;
+  requestAnimationFrame(renderDemo2Loop);
+
+  d2Theta += (d2TargetTheta - d2Theta) * D2_LERP;
+  d2Phi   += (d2TargetPhi   - d2Phi)   * D2_LERP;
+  d2Dist  += (d2TargetDist  - d2Dist)  * D2_LERP;
+
+  sphereCamera.position.set(
+    d2Dist * Math.sin(d2Phi) * Math.sin(d2Theta),
+    d2Dist * Math.cos(d2Phi),
+    d2Dist * Math.sin(d2Phi) * Math.cos(d2Theta),
+  );
+  sphereCamera.lookAt(0, 0, 0);
+
+  updateZoomBar();
   sphereRenderer.render(sphereScene, sphereCamera);
+}
+
+function drawD2DebugHand(lm, color, label) {
+  debugCtx.save();
+  debugCtx.translate(debugCanvas.width, 0);
+  debugCtx.scale(-1, 1);
+
+  debugCtx.strokeStyle = color;
+  debugCtx.lineWidth = 2;
+  for (const [a, b] of D2_HAND_CONNS) {
+    debugCtx.beginPath();
+    debugCtx.moveTo(lm[a].x * debugCanvas.width, lm[a].y * debugCanvas.height);
+    debugCtx.lineTo(lm[b].x * debugCanvas.width, lm[b].y * debugCanvas.height);
+    debugCtx.stroke();
+  }
+
+  debugCtx.fillStyle = color;
+  for (const p of lm) {
+    debugCtx.beginPath();
+    debugCtx.arc(p.x * debugCanvas.width, p.y * debugCanvas.height, 3, 0, Math.PI * 2);
+    debugCtx.fill();
+  }
+
+  const cx = lm[0].x * debugCanvas.width;
+  const cy = lm[0].y * debugCanvas.height + 14;
+  debugCtx.font = "bold 9px sans-serif";
+  debugCtx.fillText(label, cx - 14, cy);
+  debugCtx.restore();
 }
 
 function handleDemo2Hands(landmarks, handedness) {
   if (!landmarks || landmarks.length === 0) {
-    d2Pinching = false;
-    d2PrevHandX = null;
-    d2PrevHandY = null;
-    d2PrevSpread = null;
+    d2RotPinching = false;
+    d2PrevRotX = null;
+    d2PrevRotY = null;
+    d2ZoomRef = null;
     return;
   }
 
-  let rHand = null, lHand = null;
+  let userLeft = null, userRight = null;
   for (let i = 0; i < landmarks.length; i++) {
-    const label = handedness?.[i]?.label;
-    if (label === "Left" && !rHand) rHand = landmarks[i];
-    if (label === "Right" && !lHand) lHand = landmarks[i];
+    const mpLabel = handedness?.[i]?.label;
+    if (mpLabel === "Right" && !userLeft)  userLeft  = landmarks[i];
+    if (mpLabel === "Left"  && !userRight) userRight = landmarks[i];
   }
 
-  const hand = rHand || lHand;
-  if (!hand) return;
+  if (userLeft) drawD2DebugHand(userLeft, "rgba(0,255,120,0.9)", "ROTATING");
+  if (userRight) drawD2DebugHand(userRight, "rgba(255,230,50,0.9)", "ZOOM");
 
-  const thumb = hand[4], index = hand[8];
-  const pinchDist = Math.sqrt(
-    (thumb.x - index.x) ** 2 + (thumb.y - index.y) ** 2 + ((thumb.z || 0) - (index.z || 0)) ** 2
-  );
-  const isPinching = pinchDist < D2_PINCH_THRESHOLD;
+  if (userLeft) {
+    const thumb = userLeft[4], idx = userLeft[8];
+    const pd = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
+    const pinching = pd < D2_PINCH_THRESH;
 
-  if (isPinching) {
-    const hx = 1 - hand[8].x;
-    const hy = hand[8].y;
-
-    if (d2Pinching && d2PrevHandX !== null) {
-      const dx = (hx - d2PrevHandX) * D2_ORBIT_SPEED;
-      const dy = (hy - d2PrevHandY) * D2_ORBIT_SPEED;
-      sphereTheta += dx;
-      spherePhi   = Math.max(0.1, Math.min(Math.PI - 0.1, spherePhi + dy));
-      updateSphereCamera();
-    }
-
-    d2PrevHandX = hx;
-    d2PrevHandY = hy;
-    d2Pinching = true;
-  } else {
-    d2Pinching = false;
-    d2PrevHandX = null;
-    d2PrevHandY = null;
-  }
-
-  if (rHand && lHand) {
-    const rThumb = rHand[4], rIdx = rHand[8];
-    const lThumb = lHand[4], lIdx = lHand[8];
-    const rPinch = Math.sqrt((rThumb.x - rIdx.x) ** 2 + (rThumb.y - rIdx.y) ** 2);
-    const lPinch = Math.sqrt((lThumb.x - lIdx.x) ** 2 + (lThumb.y - lIdx.y) ** 2);
-
-    if (rPinch < D2_PINCH_THRESHOLD && lPinch < D2_PINCH_THRESHOLD) {
-      const spread = Math.sqrt(
-        ((1 - rHand[8].x) - (1 - lHand[8].x)) ** 2 + (rHand[8].y - lHand[8].y) ** 2
-      );
-
-      if (d2PrevSpread !== null) {
-        const delta = (spread - d2PrevSpread) * D2_ZOOM_SPEED;
-        sphereDist = Math.max(SPHERE_ZOOM_MIN, Math.min(SPHERE_ZOOM_MAX, sphereDist - delta));
-        updateSphereCamera();
+    if (pinching) {
+      const hx = 1 - userLeft[9].x;
+      const hy = userLeft[9].y;
+      if (d2RotPinching && d2PrevRotX !== null) {
+        const dx = (hx - d2PrevRotX) * D2_ORBIT_SPEED;
+        const dy = (hy - d2PrevRotY) * D2_ORBIT_SPEED;
+        d2TargetTheta += dx;
+        d2TargetPhi = Math.max(0.15, Math.min(Math.PI - 0.15, d2TargetPhi + dy));
       }
-      d2PrevSpread = spread;
+      d2PrevRotX = hx;
+      d2PrevRotY = hy;
+      d2RotPinching = true;
     } else {
-      d2PrevSpread = null;
+      d2RotPinching = false;
+      d2PrevRotX = null;
+      d2PrevRotY = null;
     }
   } else {
-    d2PrevSpread = null;
+    d2RotPinching = false;
+    d2PrevRotX = null;
+    d2PrevRotY = null;
+  }
+
+  if (userRight) {
+    const thumb = userRight[4], idx = userRight[8];
+    const spread = Math.sqrt((thumb.x - idx.x) ** 2 + (thumb.y - idx.y) ** 2);
+
+    if (d2ZoomRef === null) {
+      d2ZoomRef = spread;
+    } else {
+      const delta = (spread - d2ZoomRef) * 40;
+      d2TargetDist = Math.max(D2_ZOOM_MIN, Math.min(D2_ZOOM_MAX, d2TargetDist - delta));
+      d2ZoomRef = spread;
+    }
+  } else {
+    d2ZoomRef = null;
   }
 }
