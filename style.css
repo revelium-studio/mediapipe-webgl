@@ -379,7 +379,8 @@ body.demo2-active .panel,
 body.demo2-active .heading,
 body.demo2-active .floating-el,
 body.demo2-active .hand-cursor,
-body.demo2-active .img-transition {
+body.demo2-active .img-transition,
+body.demo2-active .ai-assistant {
   display: none !important;
 }
 
